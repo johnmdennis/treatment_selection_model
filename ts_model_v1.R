@@ -2960,6 +2960,8 @@ dev.off()
   describe(md.train.cc$firstthird.best.margin)
   
   
+  #Optimal therapy by subgroup
+  
   stacked_df <- md.train.cc %>% 
     #filter(year == 2007) %>%
     # mutate(lifeExpGrouped = cut(lifeExp, 
@@ -3187,7 +3189,172 @@ dev.off()
     ungroup() %>%   
     mutate(prop=100*n/sum(n)) 
 
-    # #Define drug pair subsets - not right - want to compare all predictions not just best drug
+  
+#If have a best drug by >3 mmol/mol, which is it? And how does it vary by subgroup
+
+  #drugline
+  md.train.bd <- md.train.cc %>% 
+    filter(best.margin.3 ==1) 
+  
+  stacked_df <- md.train.bd %>% 
+    group_by(drugline,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(drugline) %>%
+    mutate(prop=100*n/sum(n))
+  
+  #set order of stacks by changing factor levels
+  stacked_df$drugline = factor(stacked_df$drugline, levels = rev(levels(stacked_df$drugline)))
+  #create plot
+  drugline <- stackplot(stacked_df,drugline,"Line of therapy")
+  
+  #Sex
+  stacked_df.ov <- md.train.bd %>% 
+    group_by(bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    mutate(prop=100*n/sum(n),
+           sex="Overall")
+  
+  stacked_df <- md.train.bd %>% 
+    group_by(sex,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(sex) %>%
+    mutate(prop=100*n/sum(n))
+  
+  stacked_df <- rbind(stacked_df,stacked_df.ov)
+  
+  # #set order of stacks by changing factor levels
+  # stacked_df$drugline = factor(stacked_df$drugline, levels = rev(levels(stacked_df$drugline)))
+  
+  sex <- stackplot(stacked_df,sex,"Overall, and by sex")
+  sex
+  
+  #Age
+  stacked_df <- md.train.bd %>% 
+    #filter(year == 2007) %>%
+    mutate(age = cut(agetx,
+                     breaks = c(17, 50, 65, 80,102),
+                     labels = c("<50", "50-65", "65-80", "80+"))) %>%
+    group_by(age,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(age) %>%
+    mutate(prop=100*n/sum(n))
+  
+  #set order of stacks by changing factor levels
+  stacked_df$age = factor(stacked_df$age, levels = rev(levels(stacked_df$age)))
+  
+  age <- stackplot(stacked_df,age,"Current age")
+  age
+  
+  #BMI|
+  stacked_df <- md.train.bd %>% 
+    #filter(year == 2007) %>%
+    mutate(bmi = cut(prebmi,
+                     breaks = c(15, 25, 30, 35, 45),
+                     labels = c("<25", "25-30", "30-35", "35+"))) %>%
+    group_by(bmi,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(bmi) %>%
+    mutate(prop=100*n/sum(n)) %>%
+    filter(!is.na(bmi))
+  
+  #set order of stacks by changing factor levels
+  stacked_df$bmi = factor(stacked_df$bmi, levels = rev(levels(stacked_df$bmi)))
+  
+  bmi <- stackplot(stacked_df,bmi,"BMI")
+  bmi  
+  
+  #duration|
+  stacked_df <- md.train.bd %>% 
+    #filter(year == 2007) %>%
+    mutate(dur = cut(t2dmduration,
+                     breaks = c(0, 5, 10, 20, 100),
+                     labels = c("<5", "5-10", "10-20", "20+"))) %>%
+    group_by(dur,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(dur) %>%
+    mutate(prop=100*n/sum(n)) %>%
+    filter(!is.na(dur))
+  
+  #set order of stacks by changing factor levels
+  stacked_df$dur = factor(stacked_df$dur, levels = rev(levels(stacked_df$dur)))
+  
+  dur <- stackplot(stacked_df,dur,"Diabetes duration")
+  dur  
+  
+  #hba1c
+  stacked_df <- md.train.bd %>% 
+    #filter(year == 2007) %>%
+    mutate(hb = cut(prehba1c,
+                    breaks = c(53, 64, 75, 86, 95,186),
+                    labels = c("53-64", "64-75", "75-86", "86-95", "95+"))) %>%
+    group_by(hb,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(hb) %>%
+    mutate(prop=100*n/sum(n)) %>%
+    filter(!is.na(hb))
+  
+  #set order of stacks by changing factor levels
+  stacked_df$hb = factor(stacked_df$hb, levels = rev(levels(stacked_df$hb)))
+  
+  hb <- stackplot(stacked_df,hb,"Baseline HbA1c")
+  hb  
+  
+  #eGFR
+  stacked_df <- md.train.bd %>% 
+    #filter(year == 2007) %>%
+    mutate(egfr = cut(preegfr,
+                      breaks = c(0, 30, 60, 90, 180),
+                      labels = c("<30", "30-60", "60-90", "90+"))) %>%
+    group_by(egfr,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(egfr) %>%
+    mutate(prop=100*n/sum(n)) %>%
+    filter(!is.na(egfr))
+  
+  #set order of stacks by changing factor levels
+  stacked_df$egfr = factor(stacked_df$egfr, levels = rev(levels(stacked_df$egfr)))
+  
+  egfr <- stackplot(stacked_df,egfr,"eGFR")
+  egfr  
+  
+  #ethnicity
+  stacked_df <- md.train.bd %>% 
+    group_by(ethnicity,bestdrug) %>%
+    summarise(n = n()) %>% 
+    ungroup() %>% 
+    group_by(ethnicity) %>%
+    mutate(prop=100*n/sum(n)) %>%
+    filter(!is.na(ethnicity))
+  
+  #set order of stacks by changing factor levels
+  stacked_df$ethnicity = factor(stacked_df$ethnicity, levels = rev(levels(stacked_df$ethnicity)))
+  
+  ethnicity <- stackplot(stacked_df,ethnicity,"Ethnicity")
+  ethnicity  
+  
+  cplot <- (sex | age | dur | hb) / (ethnicity | drugline | bmi | egfr) +
+    plot_annotation(title="Optimal therapy by subgroup",
+                    theme = theme(plot.title = element_text(size = 18))) + 
+    plot_layout(guides = "collect") & theme(legend.position = "bottom")
+  cplot  
+  
+  grDevices::cairo_pdf(paste0(output_dir,"5drugproportions_bestdrug3.pdf"),width=16,height=8)
+  cplot 
+  dev.off()
+  
+  png(paste0(output_dir,"5drugproportions_bestdrug3.png"),width=pngwidth,height=1600,res=pngres,restoreConsole=TRUE)
+  cplot 
+  dev.off()
+  
+# #Define drug pair subsets - not right - want to compare all predictions not just best drug
   # md.train.cc.dpp4glp1 <- md.train.cc %>% 
   #   filter((bestdrug == "DPP4" | bestdrug == "GLP1") & (drugclass == "DPP4" | drugclass == "GLP1") )
   # md.train.cc.dpp4sglt2 <- md.train.cc %>% 
