@@ -473,7 +473,7 @@ set_up_data <- function(dataset.type, drugs = c("GLP1", "SGLT2","DPP4","SU","TZD
       as.data.frame()
     
   }
-  
+#  mm
   # printing inclusion patients
   if (dataset.type == "diagnostics") {
     
