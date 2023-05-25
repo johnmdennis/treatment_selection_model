@@ -562,6 +562,13 @@ set_up_data <- function(dataset.type, drugs = c("GLP1", "SGLT2","DPP4","SU","TZD
     )
   
   # Training dataset
+  # set.seed(123)
+  # ps.model.dataset.train <- ps.model.dataset %>%
+  #   group_by(drugclass) %>%
+  #   sample_frac(.6) %>%
+  #   ungroup() %>%
+  #   as.data.frame()
+  
   set.seed(123)
   ps.model.dataset.train <- ps.model.dataset %>%
     group_by(drugclass) %>%
