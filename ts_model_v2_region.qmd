@@ -6082,15 +6082,41 @@ fail <- t2d_1stinstance %>%
                                                     prealt,
                                                     preegfr,
                                                     prebmi))
-  
-  #Set data dist for rms package
+ 
+  #Remove variabels for data dist for rms package
   md.test.all.cc <- md.test.all.cc %>% dplyr::select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
 
+#Prepare discontinuation dataset  
+  load(paste0(data_dir,"disc.2004.Rda")) #Training set
+
+  #Drop those age <80
+  n.p <- nrow(disc.2004)
+  disc.2004 <- disc.2004 %>% filter(agetx<80)
+  c1 <- n.p-nrow(disc.2004)
+
+  #Recast ncurrtx
+  disc.2004 <- disc.2004 %>% mutate(ncurrtx=fct_collapse(ncurrtx,"4+"=c("4","5+")))
+  levels(disc.2004$ncurrtx)
+  
+  #Define complete case set for variables with missing data
+  disc.2004.cc <- disc.2004 %>% 
+    filter(complete.cases(pretotalcholesterol,
+                          prehdl,
+                          prealt,
+                          preegfr,
+                          prebmi)) %>%
+    mutate(hba1cmonth=12)
+  #Remove variabels for data dist for rms package
+  disc.2004.cc <- disc.2004.cc %>% dplyr::select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
+
+  
 #Set fail dataset
-fail.data <- md.train.cc
-fail.data <- md.test.all.cc
-fail.data <- md.train.cc %>% dplyr::filter(prehba1c<76)
-fail.data <- md.test.all.cc %>% dplyr::filter(prehba1c<76)
+  fail.data <- md.train.cc
+  fail.data <- md.test.all.cc
+  fail.data <- md.train.cc %>% dplyr::filter(prehba1c<76)
+  fail.data <- md.test.all.cc %>% dplyr::filter(prehba1c<76)
+  fail.data <- disc.2004.cc
+  fail.data <- disc.2004.cc %>% dplyr::filter(prehba1c<76)
 
 fail.data <- merge(fail.data,fail,by=c("patid","drugclass")) 
 
@@ -6157,6 +6183,7 @@ fail.data <- fail.data %>%
   mutate(concordant = if_else(drugclass==bestdrug,1,0))
 
 table(fail.data$concordant)
+prop.table(table(fail.data$concordant))
 
 #Match concordant and discordant, with exact matching by baseline HbA1c ventile + all other predictors and covariates
 
@@ -6294,6 +6321,26 @@ summary(coxph(Surv(stime, fail) ~ concordant, data = match.final))
 summary(coxph(Surv(stime, fail) ~ concordant + prehba1c, data = match.final))
 summary(coxph(Surv(stime, fail) ~ concordant + prehba1c + agetx + preegfr + prebmi + drugline + ncurrtx + t2dmduration + ethnicity + imd5, 
               data = match.final))
+
+m.fail <- coxph(Surv(stime, fail) ~ 
+                concordant +
+                drugline +
+                ncurrtx +
+                ethnicity +
+                imd5 +
+                smoke +
+                #rcs(hba1cmonth,5) +
+                rcs(agetx,5) +
+                sex +
+                rcs(t2dmduration,5) +
+                rcs(pretotalcholesterol,5) +
+                rcs(prehdl,5) +
+                rcs(prealt,5) +
+                rcs(preegfr,5) +
+                rcs(prebmi,5) +
+                rcs(prehba1c,5),
+              data = match.final,x=T,y=T)
+summary(m.fail)
    
 match.final$pred.benefit.q <- factor(match.final$pred.benefit.q)
 match.final$pred.benefit.abs <- -match.final$pred.benefit
@@ -6343,7 +6390,7 @@ m.fail <- cph(Surv(stime, fail) ~
                 ethnicity +
                 imd5 +
                 smoke +
-                rcs(hba1cmonth,5) +
+                #rcs(hba1cmonth,5) +
                 rcs(agetx,5) +
                 sex +
                 rcs(t2dmduration,5) +
