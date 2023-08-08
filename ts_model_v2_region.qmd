@@ -51,6 +51,8 @@ library(MatchIt)
 library(data.table)
 library(ggthemes)
 library(Rmisc)
+library(viridis)
+library(ggfortify)
 
 # output directories
 output_dir <- "C:/Users/jmd237/OneDrive - University of Exeter/John/Projects/2023_tsmodel/results/" 
@@ -58,26 +60,50 @@ data_dir <- "C:/Users/jmd237/OneDrive - University of Exeter/John/CPRD/mastermin
 
 ```
 
-## Load datasets and model objects
+## Load datasets
 
 ```{r}
 #| class-output: body
 #| label: quick load cohorts
   
   #2013 onwards drug initiations
-  load(paste0(data_dir,"md.train.2013.Rda"))
-  load(paste0(data_dir,"md.test.2013.g.Rda"))
-  load(paste0(data_dir,"md.test.2013.yr.Rda"))
+  # load(paste0(data_dir,"md.train.2013.Rda"))
+  # load(paste0(data_dir,"md.test.2013.g.Rda"))
+  # load(paste0(data_dir,"md.test.2013.yr.Rda"))
   
   #2004 onwards drug initiations (used for analysis)
   load(paste0(data_dir,"md.train.2004.Rda")) #Training set
   load(paste0(data_dir,"md.test.2004.g.Rda")) #Primary validation set (by geography)
   load(paste0(data_dir,"md.test.2004.yr.Rda")) #Secondary validation set (most recent 18m of data)
   
-  #Saved models (to allow skipping straight to validation)
-  load(paste0(output_dir,"fivedrugmodel_5knot.Rdata")) #Final model
-  load(paste0(output_dir,"fivedrugmodel_3knot.Rdata")) #Final model
-
+  #Final N
+  start.n <- nrow(md.test.2004.yr)+nrow(md.test.2004.g)+nrow(md.train.2004)
+  
+  #Drop those age <80
+  n.p <- nrow(md.train.2004)
+  md.train.2004 <- md.train.2004 %>% filter(agetx<80)
+  c1 <- n.p-nrow(md.train.2004)
+  
+  n.p <- nrow(md.test.2004.g)
+  md.test.2004.g <- md.test.2004.g %>% filter(agetx<80)
+  c2 <- n.p-nrow(md.test.2004.g)
+  
+  n.p <- nrow(md.test.2004.yr)
+  md.test.2004.yr <- md.test.2004.yr %>% filter(agetx<80)
+  c3 <- n.p-nrow(md.test.2004.yr)
+  
+  c1 + c2 +c3
+  start.n - c1 - c2 - c3
+  nrow(md.train.2004)
+  nrow(md.test.2004.g)
+  nrow(md.test.2004.yr)
+  
+  #Recast ncurrtx
+  md.train.2004 <- md.train.2004 %>% mutate(ncurrtx=fct_collapse(ncurrtx,"4+"=c("4","5+")))
+  md.test.2004.g <- md.test.2004.g %>% mutate(ncurrtx=fct_collapse(ncurrtx,"4+"=c("4","5+")))
+  md.test.2004.yr <- md.test.2004.yr %>% mutate(ncurrtx=fct_collapse(ncurrtx,"4+"=c("4","5+")))
+  levels(md.test.2004.yr$ncurrtx)
+  
 ```
 
 ## Global settings
@@ -116,9 +142,11 @@ cal_plot <- function(data,pred,obs,obslowerci,obsupperci) {
     ggplot(data=data,aes_string(x=pred,y=obs)) +
       geom_point(alpha=1) + theme_bw() +
       geom_errorbar(aes_string(ymin=obslowerci, ymax=obsupperci), colour="black", width=.1) +
-      ylab("Observed HbA1c difference (mmol/mol)") + xlab("Predicted HbA1c difference (mmol/mol)") +
-      scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
-      scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      ylab("Average HbA1c difference (Adjusted; mmol/mol)") + xlab("Predicted HbA1c difference (mmol/mol)") +
+      scale_x_continuous(limits=c(-14,14),breaks=seq(-14,14,by=2)) +
+      scale_y_continuous(limits=c(-14,14),breaks=seq(-14,14,by=2)) +
+      coord_cartesian(xlim=c(-15,15),ylim=c(-15,15)) +
+      panel_border(remove=T) +
       # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
       # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
       theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
@@ -139,7 +167,8 @@ stackplot <- function(data,strata,strataname) {
     geom_hline(yintercept = 0, size = 1, colour = "#333333") +
     labs(subtitle = paste0(strataname)) +
     theme(legend.position = "top", 
-          legend.justification = "left") +
+          legend.justification = "left",
+          plot.subtitle=element_text(size=18, color="black")) +
     guides(fill = guide_legend(reverse = TRUE)) + coord_flip()
 }
 
@@ -159,7 +188,7 @@ stacked_df <- data %>%
 
 #set order of stacks by changing factor levels
 stacked_df$drugline = factor(stacked_df$drugline, levels = rev(levels(stacked_df$drugline)))
-drugline <- stackplot(stacked_df,drugline,"Line of therapy")
+drugline <- stackplot(stacked_df,drugline,"N. previous therapies")
 
 #Sex
 stacked_df.ov <- data %>% 
@@ -185,9 +214,12 @@ sex <- stackplot(stacked_df,sex,"Overall, and by sex")
 stacked_df <- data %>% 
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
+  # mutate(age = cut(agetx,
+  #                  breaks = c(17, 50, 65, 80,102),
+  #                  labels = c("<50", "50-65", "65-80", "80+"))) %>%
   mutate(age = cut(agetx,
-                   breaks = c(17, 50, 65, 80,102),
-                   labels = c("<50", "50-65", "65-80", "80+"))) %>%
+                   breaks = c(17, 51, 60, 68, 80),
+                   labels = c("18-50", "51-59", "60-67", "68-79"))) %>%
   group_by(age,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -202,9 +234,12 @@ age <- stackplot(stacked_df,age,"Current age")
 stacked_df <- data %>% 
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
+  # mutate(bmi = cut(prebmi,
+  #                  breaks = c(15, 25, 30, 35, 45),
+  #                  labels = c("<25", "25-30", "30-35", "35+"))) %>%
   mutate(bmi = cut(prebmi,
-                   breaks = c(15, 25, 30, 35, 45),
-                   labels = c("<25", "25-30", "30-35", "35+"))) %>%
+                   breaks = c(15, 28, 31, 36, 100),
+                   labels = c("<28", "28-30", "31-35", "36+"))) %>%
   group_by(bmi,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -220,9 +255,12 @@ bmi <- stackplot(stacked_df,bmi,"BMI")
 stacked_df <- data %>% 
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
+  # mutate(dur = cut(t2dmduration,
+  #                  breaks = c(0, 5, 10, 20, 100),
+  #                  labels = c("<5", "5-10", "10-20", "20+"))) %>%
   mutate(dur = cut(t2dmduration,
-                   breaks = c(0, 5, 10, 20, 100),
-                   labels = c("<5", "5-10", "10-20", "20+"))) %>%
+                   breaks = c(0, 3, 6, 10, 100),
+                   labels = c("<3", "3-5", "6-9", "10+"))) %>%
   group_by(dur,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -238,9 +276,12 @@ dur <- stackplot(stacked_df,dur,"Diabetes duration")
 stacked_df <- data %>% 
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
+  # mutate(hb = cut(prehba1c,
+  #                 breaks = c(53, 64, 75, 86, 95,186),
+  #                 labels = c("53-64", "64-75", "75-86", "86-95", "95+"))) %>%
   mutate(hb = cut(prehba1c,
-                  breaks = c(53, 64, 75, 86, 95,186),
-                  labels = c("53-64", "64-75", "75-86", "86-95", "95+"))) %>%
+                  breaks = c(53, 63, 70, 81, 111),
+                  labels = c("53-62", "63-69", "70-80", "81+"))) %>%
   group_by(hb,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -256,9 +297,12 @@ hb <- stackplot(stacked_df,hb,"Baseline HbA1c")
 stacked_df <- data %>% 
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
+  # mutate(egfr = cut(preegfr,
+  #                   breaks = c(0, 30, 60, 90, 180),
+  #                   labels = c("<30", "30-60", "60-90", "90+"))) %>%
   mutate(egfr = cut(preegfr,
-                    breaks = c(0, 30, 60, 90, 180),
-                    labels = c("<30", "30-60", "60-90", "90+"))) %>%
+                    breaks = c(0, 77, 92, 103, 160),
+                    labels = c("<77", "77-91", "92-102", "103+"))) %>%
   group_by(egfr,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -277,6 +321,7 @@ stacked_df <- data %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
   group_by(ethnicity) %>%
+  filter(ethnicity!="Missing") %>%
   mutate(prop=100*n/sum(n)) %>%
   filter(!is.na(ethnicity))
 
@@ -289,8 +334,8 @@ stacked_df <- data %>%
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
   mutate(tc = cut(pretotalcholesterol,
-                  breaks = c(0, 3.5, 4.1, 4.8, 20),
-                  labels = c("<3.5", "3.5-4.1", "4.8-20", "20+"))) %>%
+                  breaks = c(0, 3.6, 4.1, 4.8, 20),
+                  labels = c("<3.6", "3.6-4.0", "4.1-4.7", "4.8+"))) %>%
   group_by(tc,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -307,8 +352,8 @@ stacked_df <- data %>%
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
   mutate(alt = cut(prealt,
-                   breaks = c(0, 20, 28, 40,200),
-                   labels = c("<20", "20-28", "28-40", "40+"))) %>%
+                   breaks = c(0, 21, 30, 42, 201),
+                   labels = c("<21", "21-29", "30-41", "42+"))) %>%
   group_by(alt,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -325,8 +370,8 @@ stacked_df <- data %>%
   filter(bestdrug!="DPP4") %>%
   #filter(year == 2007) %>%
   mutate(hdl = cut(prehdl,
-                   breaks = c(0, 0.9, 1.1, 1.3, 6.3),
-                   labels = c("<0.9", "0.9-1.1", "1.1-1.3", "6.3"))) %>%
+                   breaks = c(0, 0.9, 1.1, 1.3, 10),
+                   labels = c("<0.9", "0.9-1.0", "1.1-1.2", "1.3+"))) %>%
   group_by(hdl,bestdrug) %>%
   dplyr::summarise(n = n()) %>% 
   ungroup() %>% 
@@ -336,7 +381,7 @@ stacked_df <- data %>%
 
 #set order of stacks by changing factor levels
 stacked_df$hdl = factor(stacked_df$hdl, levels = rev(levels(stacked_df$hdl)))
-hdl <- stackplot(stacked_df,hdl,"HDL")
+hdl <- stackplot(stacked_df,hdl,"HDL-c")
 
 #imd5
 stacked_df <- data %>% 
@@ -364,7 +409,7 @@ stacked_df <- data %>%
 
 #set order of stacks by changing factor levels
 stacked_df$ncurrtx = factor(stacked_df$ncurrtx, levels = rev(levels(stacked_df$ncurrtx)))
-ncurrtx <- stackplot(stacked_df,ncurrtx,"Number of current therapies")
+ncurrtx <- stackplot(stacked_df,ncurrtx,"N. current therapies")
 
 #smoke
 stacked_df <- data %>% 
@@ -383,7 +428,7 @@ smoke <- stackplot(stacked_df,smoke,"Smoking status")
 
 cplot <- (sex | age | dur | hb | bmi | egfr | alt) / (tc | hdl | ethnicity | imd5 | drugline | ncurrtx | smoke ) +
   plot_annotation(title="Optimal therapy by subgroup",
-                  theme = theme(plot.title = element_text(size = 12))) + 
+                  theme = theme(plot.title = element_text(size = 10))) + 
   plot_layout(guides = "collect") & theme(legend.position = "bottom")
 return(cplot) 
 }
@@ -408,11 +453,11 @@ data <- data %>%
 data$GLP1 <- predict(model,data)
 data <- data %>% 
   mutate(drugclass=drug) %>% 
-  select(-drug)
+  dplyr::select(-drug)
 return(data)
 }
 
-#Validation for each drug pair
+#Validation for each drug pair (full)
 validation.comb <- function(data) {
 #DPP4-GLP1
 c1 <- data %>% 
@@ -816,6 +861,249 @@ calplot <- (dpp4sglt2 | dpp4su | dpp4glp1 | dpp4tzd | sutzd) / (susglt2 | suglp1
 return(calplot)  
 }
 
+#Validation for each drug pair (no tzd)
+validation.comb.notzd <- function(data) {
+  #DPP4-GLP1
+  c1 <- data %>% 
+    filter(drugclass == "DPP4" | drugclass == "GLP1") %>% 
+    mutate(hba1c_diff = GLP1-DPP4,
+           bestdrug=ifelse(hba1c_diff<=0,"GLP1","DPP4"),
+           hba1c_diff.q = ntile(hba1c_diff, 10))
+  
+  #define dataset with predicted values
+  t1 <- c1 %>% 
+    group_by(hba1c_diff.q) %>%
+    dplyr::summarize(N=length(hba1c_diff),
+                     hba1c_diff.pred = mean(hba1c_diff))
+  
+  #obs vs pred, by decile of predicted treatment difference
+  #For Formula 1-3
+  mnumber = c(1:10)
+  models  <- as.list(1:10)
+  
+  hba1c_diff.obs.adj <- vector()
+  lower.adj <- vector()
+  upper.adj <- vector() 
+  
+  #Full
+  for(i in mnumber) {
+    models[[i]] <- lm(as.formula(formula2),data=c1,subset=hba1c_diff.q==i)
+    hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+    confint_all <- confint(models[[i]], levels=0.95)
+    lower.adj <- append(lower.adj,confint_all[2,1])
+    upper.adj <- append(upper.adj,confint_all[2,2])
+  }
+  
+  #Final data.frame  
+  t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+  plotdata <- t1 %>% dplyr::mutate(obs=hba1c_diff.obs.adj,lci=lower.adj,uci=upper.adj)
+  
+  library(ggthemes)
+  dpp4glp1 <- cal_plot(plotdata,"hba1c_diff.pred","obs","lci","uci") + ggtitle(paste0("GLP1-RA - DPP4i (n=",nrow(c1),")"))  
+  
+  #DPP4 SGLT2
+  c1 <- data %>% 
+    filter(drugclass == "SGLT2" | drugclass == "DPP4") %>% 
+    mutate(hba1c_diff = SGLT2-DPP4,
+           bestdrug=ifelse(hba1c_diff<=0,"SGLT2","DPP4"),
+           hba1c_diff.q = ntile(hba1c_diff, 10))
+  
+  #define dataset with predicted values
+  t1 <- c1 %>% 
+    group_by(hba1c_diff.q) %>%
+    dplyr::summarize(N=length(hba1c_diff),
+                     hba1c_diff.pred = mean(hba1c_diff))
+  
+  #obs vs pred, by decile of predicted treatment difference
+  #For Formula 1-3
+  mnumber = c(1:10)
+  models  <- as.list(1:10)
+  
+  hba1c_diff.obs.adj <- vector()
+  lower.adj <- vector()
+  upper.adj <- vector() 
+  
+  #Full
+  for(i in mnumber) {
+    models[[i]] <- lm(as.formula(formula2),data=c1,subset=hba1c_diff.q==i)
+    hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+    confint_all <- confint(models[[i]], levels=0.95)
+    lower.adj <- append(lower.adj,confint_all[2,1])
+    upper.adj <- append(upper.adj,confint_all[2,2])
+  }
+  
+  #Final data.frame  
+  t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+  plotdata <- t1 %>% dplyr::mutate(obs=hba1c_diff.obs.adj,lci=lower.adj,uci=upper.adj)
+  
+  dpp4sglt2 <- cal_plot(plotdata,"hba1c_diff.pred","obs","lci","uci") + ggtitle(paste0("SGLT2i - DPP4i (n=",nrow(c1),")"))  
+  dpp4sglt2
+  
+  #DPP4 SU
+  c1 <- data %>% 
+    filter(drugclass == "SU" | drugclass == "DPP4") %>% 
+    mutate(hba1c_diff = SU-DPP4,
+           bestdrug=ifelse(hba1c_diff<=0,"SU","DPP4"),
+           hba1c_diff.q = ntile(hba1c_diff, 10))
+  
+  #define dataset with predicted values
+  t1 <- c1 %>% 
+    group_by(hba1c_diff.q) %>%
+    dplyr::summarize(N=length(hba1c_diff),
+                     hba1c_diff.pred = mean(hba1c_diff))
+  
+  #obs vs pred, by decile of predicted treatment difference
+  #For Formula 1-3
+  mnumber = c(1:10)
+  models  <- as.list(1:10)
+  
+  hba1c_diff.obs.adj <- vector()
+  lower.adj <- vector()
+  upper.adj <- vector() 
+  
+  #Full
+  for(i in mnumber) {
+    models[[i]] <- lm(as.formula(formula2),data=c1,subset=hba1c_diff.q==i)
+    hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+    confint_all <- confint(models[[i]], levels=0.95)
+    lower.adj <- append(lower.adj,confint_all[2,1])
+    upper.adj <- append(upper.adj,confint_all[2,2])
+  }
+  
+  #Final data.frame  
+  t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+  plotdata <- t1 %>% dplyr::mutate(obs=hba1c_diff.obs.adj,lci=lower.adj,uci=upper.adj)
+  
+  dpp4su <- cal_plot(plotdata,"hba1c_diff.pred","obs","lci","uci") + ggtitle(paste0("SU - DPP4i (n=",nrow(c1),")")) 
+  dpp4su
+
+  #SU SGLT2
+  c1 <- data %>% 
+    filter(drugclass == "SU" | drugclass == "SGLT2") %>% 
+    mutate(hba1c_diff = SGLT2-SU,
+           bestdrug=ifelse(hba1c_diff<=0,"SGLT2","SU"),
+           hba1c_diff.q = ntile(hba1c_diff, 10))
+  
+  #define dataset with predicted values
+  t1 <- c1 %>% 
+    group_by(hba1c_diff.q) %>%
+    dplyr::summarize(N=length(hba1c_diff),
+                     hba1c_diff.pred = mean(hba1c_diff))
+  
+  #obs vs pred, by decile of predicted treatment difference
+  #For Formula 1-3
+  mnumber = c(1:10)
+  models  <- as.list(1:10)
+  
+  hba1c_diff.obs.adj <- vector()
+  lower.adj <- vector()
+  upper.adj <- vector() 
+  
+  #Full
+  for(i in mnumber) {
+    models[[i]] <- lm(as.formula(formula2),data=c1,subset=hba1c_diff.q==i)
+    hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+    confint_all <- confint(models[[i]], levels=0.95)
+    lower.adj <- append(lower.adj,confint_all[2,1])
+    upper.adj <- append(upper.adj,confint_all[2,2])
+  }
+  
+  #Final data.frame  
+  t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+  plotdata <- t1 %>% dplyr::mutate(obs=hba1c_diff.obs.adj,lci=lower.adj,uci=upper.adj)
+  
+  susglt2 <- cal_plot(plotdata,"hba1c_diff.pred","obs","lci","uci") + ggtitle(paste0("SGLT2i - SU (n=",nrow(c1),")"))  
+  susglt2
+  
+  #SU GLP1
+  c1 <- data %>% 
+    filter(drugclass == "GLP1" | drugclass == "SU") %>% 
+    mutate(hba1c_diff = GLP1-SU,
+           bestdrug=ifelse(hba1c_diff<=0,"GLP1","SU"),
+           hba1c_diff.q = ntile(hba1c_diff, 10))
+  
+  #define dataset with predicted values
+  t1 <- c1 %>% 
+    group_by(hba1c_diff.q) %>%
+    dplyr::summarize(N=length(hba1c_diff),
+                     hba1c_diff.pred = mean(hba1c_diff))
+  
+  #obs vs pred, by decile of predicted treatment difference
+  #For Formula 1-3
+  mnumber = c(1:10)
+  models  <- as.list(1:10)
+  
+  hba1c_diff.obs.adj <- vector()
+  lower.adj <- vector()
+  upper.adj <- vector() 
+  
+  #Full
+  for(i in mnumber) {
+    models[[i]] <- lm(as.formula(formula2),data=c1,subset=hba1c_diff.q==i)
+    hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+    confint_all <- confint(models[[i]], levels=0.95)
+    lower.adj <- append(lower.adj,confint_all[2,1])
+    upper.adj <- append(upper.adj,confint_all[2,2])
+  }
+  
+  #Final data.frame  
+  t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+  plotdata <- t1 %>% dplyr::mutate(obs=hba1c_diff.obs.adj,lci=lower.adj,uci=upper.adj)
+  
+  suglp1 <- cal_plot(plotdata,"hba1c_diff.pred","obs","lci","uci") + ggtitle(paste0("GLP1-RA - SU (n=",nrow(c1),")"))  
+  suglp1
+  
+  
+  #SGLT2 GLP1
+  #Set reference category
+  data$drugclass <- relevel(data$drugclass,ref="GLP1") 
+  
+  c1 <- data %>% 
+    filter(drugclass == "SGLT2" | drugclass == "GLP1") %>% 
+    mutate(hba1c_diff = SGLT2-GLP1,
+           bestdrug=ifelse(hba1c_diff<=0,"SGLT2","GLP1"),
+           hba1c_diff.q = ntile(hba1c_diff, 10))
+  
+  #define dataset with predicted values
+  t1 <- c1 %>% 
+    group_by(hba1c_diff.q) %>%
+    dplyr::summarize(N=length(hba1c_diff),
+                     hba1c_diff.pred = mean(hba1c_diff))
+  
+  #obs vs pred, by decile of predicted treatment difference
+  #For Formula 1-3
+  mnumber = c(1:10)
+  models  <- as.list(1:10)
+  
+  hba1c_diff.obs.adj <- vector()
+  lower.adj <- vector()
+  upper.adj <- vector() 
+  
+  #Full
+  for(i in mnumber) {
+    models[[i]] <- lm(as.formula(formula2),data=c1,subset=hba1c_diff.q==i)
+    hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+    confint_all <- confint(models[[i]], levels=0.95)
+    lower.adj <- append(lower.adj,confint_all[2,1])
+    upper.adj <- append(upper.adj,confint_all[2,2])
+  }
+  
+  #Final data.frame  
+  t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+  plotdata <- t1 %>% dplyr::mutate(obs=hba1c_diff.obs.adj,lci=lower.adj,uci=upper.adj)
+  
+  sglt2glp1 <- cal_plot(plotdata,"hba1c_diff.pred","obs","lci","uci") + ggtitle(paste0("SGLT2i - GLP1-RA (n=",nrow(c1),")"))  
+  sglt2glp1
+  
+  #export
+  calplot <- (dpp4sglt2 | dpp4su | dpp4glp1) / (susglt2 | suglp1 | sglt2glp1) +
+    plot_annotation(title="Calibration by drug contrast",
+                    theme = theme(plot.title = element_text(size = 18))) + 
+    plot_layout(guides = "collect") & theme(legend.position = "bottom")
+  return(calplot)  
+}
+
+
 # function to plot drug * feature interaction
 hte.plot.cont <- function(data, title) {
   if(title==as.character("Baseline HbA1c (mmol/mol)")) {
@@ -1101,8 +1389,32 @@ return(cov.plot)
                                                     prebmi))
   
   #Set data dist for rms package
-  md.train.cc <- md.train.cc %>% select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
-  ddist <- datadist(md.train.cc); options(datadist='ddist') 
+  md.train.cc <- md.train.cc %>% dplyr::select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
+  ddist <- datadist(md.train.cc); options(datadist='ddist')
+  
+  md.train.cc.backup <- md.train.cc
+  
+  #Baseline table
+  Vars <- c("agetx","sex","t2dmduration","drugline","ncurrtx","yrdrugstart","ethnicity","imd5","smoke","prehba1c","preegfr","preacr","prebmi",
+            "prehdl","pretriglyceride","pretotalcholesterol","premap",
+            "prealt","preast","prebilirubin","prealbuminblood",
+            "prehaematocrit","prehaemoglobin","prehypertension","predrug_cvd","preheartfailure","preaf",
+            "preneuropathy","prediabeticnephropathy","preretinopathy","precld",
+            "precopd","precancer","pretransplant","preanx","prefalls","preosteo","preamp",
+            "ace.6m","bb.6m","ccb.6m","diur.6m","immuno.6m","oralster.6m","statin.6m",
+            "hba1cmonth","posthba1cfinal","hba1cresponse")
+  FactorVars <- c("drugline","ncurrtx","ethnicity","imd5","smoke",
+                  "prehypertension","predrug_cvd","preheartfailure","preaf",
+                  "preneuropathy","prediabeticnephropathy","preretinopathy","precld",
+                  "precopd","precancer","pretransplant","preanx","prefalls","preosteo","preamp",
+                  "ace.6m","bb.6m","ccb.6m","diur.6m","immuno.6m","oralster.6m","statin.6m")
+  ## BY MATCHED / ID Create the table
+  Table <- CreateTableOne(vars=Vars, strata=c("drugclass"),factorVars = FactorVars, data=md.train.cc)
+  Table
+  
+  tabPrint <-print(Table, nonnormal = TRUE,noSpaces = TRUE, smd=T)
+  
+  #stargazer(tabPrint, type="html", out=paste0(output_dir,"train_base_char.html"), out.header=TRUE)
 ```
 
 ## Model development
@@ -1198,10 +1510,11 @@ m1
 plot(anova(m1), what='proportion R2')
 
 #Final model equation
-Function(m1)
+#Function(m1)
 
 #Save
-save(m1,file=paste0(output_dir,"fivedrugmodel_5knot.Rdata"))
+m1.5 <- m1
+save(m1.5,file=paste0(output_dir,"fivedrugmodel_5knot.Rdata"))
 
 
 # Secondary model setup (3-knot rcs for all continuous variables for maximum flexibility)
@@ -1211,7 +1524,7 @@ formula1 <- "posthba1cfinal ~
   ethnicity +
   imd5 +
   smoke +
-    rcs(prehdl,3)*drugclass +
+  rcs(prehdl,3)*drugclass +
   rcs(prealt,3)*drugclass +
   rcs(preegfr,3)*drugclass +
   rcs(prebmi,3)*drugclass +
@@ -1224,7 +1537,7 @@ formula1 <- "posthba1cfinal ~
 
 #Fit model
 m1 <- ols(as.formula(formula1),data=md.train.cc,x=TRUE,y=TRUE)
-Function(m1)
+#Function(m1)
 
 #Number of observations and starting patients
 nobs(m1)
@@ -1262,12 +1575,13 @@ m1
 plot(anova(m1), what='proportion R2')
 
 #Final model equation
-Function(m1)
+#Function(m1)
 
 #Save
-save(m1,file=paste0(output_dir,"fivedrugmodel_3knot.Rdata"))
+m1.3 <- m1
+save(m1.3,file=paste0(output_dir,"fivedrugmodel_3knot.Rdata"))
 
-# Secondary model setup (3-knot rcs for all continuous variables for maximum flexibility)
+# Secondary model setup (5-knot rcs for all continuous variables for maximum flexibility), no age interaction
 formula1 <- "posthba1cfinal ~ 
   drugline +
   ncurrtx +
@@ -1325,13 +1639,163 @@ m1
 plot(anova(m1), what='proportion R2')
 
 #Final model equation
-Function(m1)
+#Function(m1)
 
 #Save
-save(m1,file=paste0(output_dir,"fivedrugmodel_3knot_age.Rdata"))
+m1.5.age <- m1
+save(m1.5.age,file=paste0(output_dir,"fivedrugmodel_5knot_age.Rdata"))
 
-m1.5 <- m1
-m1 <- m1.5
+
+#Males
+# Primary model setup (5-knot rcs for all continuous variables for maximum flexibility)
+formula1 <- "posthba1cfinal ~ drugclass +
+  drugline +
+  ncurrtx +
+  ethnicity +
+  imd5 +
+  smoke +
+  rcs(hba1cmonth,5)*drugclass +
+  rcs(agetx,5)*drugclass +
+  rcs(t2dmduration,5)*drugclass +
+  rcs(pretotalcholesterol,5)*drugclass +
+  rcs(prehdl,5)*drugclass +
+  rcs(prealt,5)*drugclass +
+  rcs(preegfr,5)*drugclass +
+  rcs(prebmi,5)*drugclass +
+  rcs(prehba1c,5)*drugclass"
+
+#Fit model
+m1 <- ols(as.formula(formula1),data=md.train.cc,x=TRUE,y=TRUE,subset=sex=="Male")
+
+#Number of observations and starting patients
+nobs(m1)
+nrow(md.train.cc)
+
+#F-test for global significance of different model components
+anova(m1,indnl=FALSE)
+
+#Plot variables by proportion of R2 for predicting HbA1c outcome directly
+plot(anova(m1), what='proportion R2')
+
+##Apply penalisation to adjust for overfitting (allow different penalties for simple, non-linear and interaction terms)
+
+#Final optimal penalty
+pen<- pentrace(m1,
+               list(simple=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000),
+                    nonlinear=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000),
+                    interaction=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000)))
+
+pen$penalty #optimal penalty
+
+#Update model applying penalty
+m1 <- update(m1, penalty=pen$penalty)
+
+#Effective degrees of freedom of updated model
+effective.df(m1)
+
+#Use saved model (rather then run above which takes a long time)
+#m1 <- m1.5
+
+#Print summary of model object 
+m1
+
+#Plot variables by proportion of R2 for predicting HbA1c outcome directly from penalised model
+plot(anova(m1), what='proportion R2')
+
+#Final model equation
+#Function(m1)
+
+#Save
+m1.5.males <- m1
+save(m1.5.males,file=paste0(output_dir,"fivedrugmodel_5knot_males.Rdata"))
+
+#Females
+# Primary model setup (5-knot rcs for all continuous variables for maximum flexibility)
+formula1 <- "posthba1cfinal ~ drugclass +
+  drugline +
+  ncurrtx +
+  ethnicity +
+  imd5 +
+  smoke +
+  rcs(hba1cmonth,5)*drugclass +
+  rcs(agetx,5)*drugclass +
+  rcs(t2dmduration,5)*drugclass +
+  rcs(pretotalcholesterol,5)*drugclass +
+  rcs(prehdl,5)*drugclass +
+  rcs(prealt,5)*drugclass +
+  rcs(preegfr,5)*drugclass +
+  rcs(prebmi,5)*drugclass +
+  rcs(prehba1c,5)*drugclass"
+
+#Fit model
+m1 <- ols(as.formula(formula1),data=md.train.cc,x=TRUE,y=TRUE,subset=sex=="Female")
+
+#Number of observations and starting patients
+nobs(m1)
+nrow(md.train.cc)
+
+#F-test for global significance of different model components
+anova(m1,indnl=FALSE)
+
+#Plot variables by proportion of R2 for predicting HbA1c outcome directly
+plot(anova(m1), what='proportion R2')
+
+##Apply penalisation to adjust for overfitting (allow different penalties for simple, non-linear and interaction terms)
+
+#Final optimal penalty
+pen<- pentrace(m1,
+               list(simple=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000),
+                    nonlinear=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000),
+                    interaction=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000)))
+
+pen$penalty #optimal penalty
+
+#Update model applying penalty
+m1 <- update(m1, penalty=pen$penalty)
+
+#Effective degrees of freedom of updated model
+effective.df(m1)
+
+#Use saved model (rather then run above which takes a long time)
+#m1 <- m1.5
+
+#Print summary of model object 
+m1
+
+#Plot variables by proportion of R2 for predicting HbA1c outcome directly from penalised model
+plot(anova(m1), what='proportion R2')
+
+#Final model equation
+#Function(m1)
+
+#Save
+m1.5.females <- m1
+save(m1.5.females,file=paste0(output_dir,"fivedrugmodel_5knot_females.Rdata"))
+
+```
+
+
+## Set model of interest for rest of script (QUICK LOAD)
+
+```{r}
+#| label: Set model of interest
+#Saved models (to allow skipping straight to validation)
+  load(paste0(output_dir,"fivedrugmodel_5knot_females.Rdata")); m1.5.f <- m1.5.females
+  load(paste0(output_dir,"fivedrugmodel_5knot_males.Rdata")); m1.5.m <- m1.5.males
+  load(paste0(output_dir,"fivedrugmodel_5knot.Rdata")) 
+  load(paste0(output_dir,"fivedrugmodel_3knot.Rdata")) 
+  load(paste0(output_dir,"fivedrugmodel_5knot_age.Rdata")) 
+  load(paste0(output_dir,"fivedrugmodel_5knot_completecohort.Rdata")) 
+  load(paste0(output_dir,"fivedrugmodel_5knot_share_20230823.Rdata")) 
+
+#Set model
+  m1 <- m1.3; model <- "m1.3"
+  m1 <- m1.5.age; model <- "m1.5.age"
+  m1 <- m1.5; model <- "m1.5"
+  
+#Reload training data
+  md.train.cc <- md.train.cc.backup; cohort <- "dev"
+  
 ```
 
 ## Plot baseline HbA1c effects on HbA1c response by drug
@@ -1376,11 +1840,11 @@ rplot.prehba1c <- ggplot(data = w, aes(x = prehba1c, y = yhat, group=drugclass))
         plot.title = element_text(size = rel(1.5), face = "bold")) 
 rplot.prehba1c
 
-grDevices::cairo_pdf(paste0(output_dir,"5drug_predictedbyHbA1c.pdf"),width=8,height=8)
+grDevices::cairo_pdf(paste0(output_dir,"5drug_predictedbyHbA1c_",cohort,"_",model,".pdf"),width=8,height=8)
 rplot.prehba1c  
 dev.off()
 
-png(paste0(output_dir,"5drugcalibration_cprdval_predictedbyHbA1c.png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+png(paste0(output_dir,"5drug_predictedbyHbA1c_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
 rplot.prehba1c  
 dev.off()
 ```
@@ -1390,7 +1854,7 @@ dev.off()
 ```{r}
 #| label: Plot drug * features interaction outputs for all continuous features
 
-m1 <- m1.5
+#m1 <- m1.5
 
 sex.n <- "Male"; males <- hte.plot.comb(md.train.cc)
 sex.n <- "Female"; females <- hte.plot.comb(md.train.cc)
@@ -1398,45 +1862,45 @@ sex.n <- "Female"; females <- hte.plot.comb(md.train.cc)
 males
 females
 
-grDevices::cairo_pdf(paste0(output_dir,"5drug_predicted_drugbyfeature_males.pdf"),width=12,height=8)
+grDevices::cairo_pdf(paste0(output_dir,"5drug_drugbyfeature_males_",cohort,"_",model,".pdf"),width=12,height=8)
 males
 dev.off()
 
-png(paste0(output_dir,"5drugcalibration_cprdval_drugbyfeature_males.png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
+png(paste0(output_dir,"5drug_drugbyfeature_males_",cohort,"_",model,".png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
 males
 dev.off()
 
-grDevices::cairo_pdf(paste0(output_dir,"5drug_drugbyfeature_females.pdf"),width=12,height=8)
+grDevices::cairo_pdf(paste0(output_dir,"5drug_drugbyfeature_females_",cohort,"_",model,".pdf"),width=12,height=8)
 females
 dev.off()
 
-png(paste0(output_dir,"5drugcalibration_cprdval_drugbyfeature_females.png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
+png(paste0(output_dir,"5drug_drugbyfeature_females_",cohort,"_",model,".png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
 females
 dev.off()
 
-m1 <- m1.3
-
-sex.n <- "Male"; males <- hte.plot.comb(md.train.cc)
-sex.n <- "Female"; females <- hte.plot.comb(md.train.cc)
-
-males
-females
-
-grDevices::cairo_pdf(paste0(output_dir,"5drug_predicted_drugbyfeature_males_m1.3.pdf"),width=12,height=8)
-males
-dev.off()
-
-png(paste0(output_dir,"5drugcalibration_cprdval_drugbyfeature_males_m1.3.png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
-males
-dev.off()
-
-grDevices::cairo_pdf(paste0(output_dir,"5drug_drugbyfeature_females_m1.3.pdf"),width=12,height=8)
-females
-dev.off()
-
-png(paste0(output_dir,"5drugcalibration_cprdval_drugbyfeature_females_m1.3.png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
-females
-dev.off()
+# m1 <- m1.3
+# 
+# sex.n <- "Male"; males <- hte.plot.comb(md.train.cc)
+# sex.n <- "Female"; females <- hte.plot.comb(md.train.cc)
+# 
+# males
+# females
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drug_predicted_drugbyfeature_males_m1.3.pdf"),width=12,height=8)
+# males
+# dev.off()
+# 
+# png(paste0(output_dir,"5drugcalibration_cprdval_drugbyfeature_males_m1.3.png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
+# males
+# dev.off()
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drug_drugbyfeature_females_m1.3.pdf"),width=12,height=8)
+# females
+# dev.off()
+# 
+# png(paste0(output_dir,"5drugcalibration_cprdval_drugbyfeature_females_m1.3.png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
+# females
+# dev.off()
 ```
 
 ## Model outputs - concordant-discordant and best drug proportions
@@ -1457,6 +1921,36 @@ md.train.cc <- md.train.cc %>%
   mutate(concordant = if_else(drugclass==bestdrug,1,0))
 
 table(md.train.cc$concordant)
+
+#Compare observed v predicted average outcome
+#Validation formula overall
+    formula3 <-
+    "posthba1cfinal ~ concordant +
+    drugline +
+    ncurrtx +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
+    sex +
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)" 
+
+
+#Adjusted
+m.cd <- lm(as.formula(formula3),data=md.train.cc)
+summary(m.cd)
+confint(m.cd)
+
+est <- m.cd$coefficients[2]
+ci.l <- confint(m.cd)[2]
+ci.u <- confint(m.cd)[2,2]
 
 #Summaries of best drug
 #N's
@@ -1479,7 +1973,7 @@ dummy <- md.train.cc %>%
 
 setDT(dummy)[, second.lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
 dummy[, secondbestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
-dummy <- data.frame(dummy) %>% select(second.lowest.hba1c,secondbestdrug)
+dummy <- data.frame(dummy) %>% dplyr::select(second.lowest.hba1c,secondbestdrug)
 md.train.cc <- cbind(md.train.cc,dummy)
 
 #N's
@@ -1499,7 +1993,7 @@ dummy <- md.train.cc %>%
 
 setDT(dummy)[, third.lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
 dummy[, thirdbestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
-dummy <- data.frame(dummy) %>% select(third.lowest.hba1c,thirdbestdrug)
+dummy <- data.frame(dummy) %>% dplyr::select(third.lowest.hba1c,thirdbestdrug)
 
 md.train.cc <- cbind(md.train.cc,dummy) 
 
@@ -1510,6 +2004,46 @@ describe(md.train.cc$second.best.margin)
 #Work out the difference in HbA1c between 1 and 3
 md.train.cc <- md.train.cc %>% mutate(firstthird.best.margin = lowest.hba1c-third.lowest.hba1c)
 describe(md.train.cc$firstthird.best.margin)
+
+#Find the foruth lowest HbA1c
+dummy <- md.train.cc %>%
+  mutate(DPP4=ifelse(DPP4==lowest.hba1c|DPP4==second.lowest.hba1c|DPP4==third.lowest.hba1c,999999,DPP4),
+         SGLT2=ifelse(SGLT2==lowest.hba1c|SGLT2==second.lowest.hba1c|SGLT2==third.lowest.hba1c,999999,SGLT2),
+         SU=ifelse(SU==lowest.hba1c|SU==second.lowest.hba1c|SU==third.lowest.hba1c,999999,SU),
+         TZD=ifelse(TZD==lowest.hba1c|TZD==second.lowest.hba1c|TZD==third.lowest.hba1c,999999,TZD),
+         GLP1=ifelse(GLP1==lowest.hba1c|GLP1==second.lowest.hba1c|GLP1==third.lowest.hba1c,999999,GLP1))
+
+setDT(dummy)[, fourth.lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+dummy[, fourthbestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+dummy <- data.frame(dummy) %>% dplyr::select(fourth.lowest.hba1c,fourthbestdrug)
+
+md.train.cc <- cbind(md.train.cc,dummy) 
+
+#Work out the difference in HbA1c between 1 and 4
+md.train.cc <- md.train.cc %>% mutate(firstfourth.best.margin = lowest.hba1c-fourth.lowest.hba1c)
+describe(md.train.cc$firstfourth.best.margin)
+
+
+#Find the fifth lowest HbA1c
+dummy <- md.train.cc %>%
+  mutate(DPP4=ifelse(DPP4==lowest.hba1c|DPP4==second.lowest.hba1c|DPP4==third.lowest.hba1c|DPP4==fourth.lowest.hba1c,999999,DPP4),
+         SGLT2=ifelse(SGLT2==lowest.hba1c|SGLT2==second.lowest.hba1c|SGLT2==third.lowest.hba1c|SGLT2==fourth.lowest.hba1c,999999,SGLT2),
+         SU=ifelse(SU==lowest.hba1c|SU==second.lowest.hba1c|SU==third.lowest.hba1c|SU==fourth.lowest.hba1c,999999,SU),
+         TZD=ifelse(TZD==lowest.hba1c|TZD==second.lowest.hba1c|TZD==third.lowest.hba1c|TZD==fourth.lowest.hba1c,999999,TZD),
+         GLP1=ifelse(GLP1==lowest.hba1c|GLP1==second.lowest.hba1c|GLP1==third.lowest.hba1c|GLP1==fourth.lowest.hba1c,999999,GLP1))
+
+setDT(dummy)[, fifth.lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+dummy[, fifthbestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+dummy <- data.frame(dummy) %>% dplyr::select(fifth.lowest.hba1c,fifthbestdrug)
+
+md.train.cc <- cbind(md.train.cc,dummy) 
+
+#Work out the difference in HbA1c between 1 and 4
+md.train.cc <- md.train.cc %>% mutate(firstfifth.best.margin = lowest.hba1c-fifth.lowest.hba1c,
+                                      nobestdrug=ifelse(firstfifth.best.margin> -3,1,0))
+describe(md.train.cc$firstfifth.best.margin)
+table(md.train.cc$nobestdrug)
+
 ```
 
 ## Model outputs - best drug by clinical characteristics
@@ -1521,11 +2055,11 @@ describe(md.train.cc$firstthird.best.margin)
 overall.best.drug <- stackplot.comb(md.train.cc)
 overall.best.drug
 
-grDevices::cairo_pdf(paste0(output_dir,"5drugproportions.pdf"),width=24,height=8)
+grDevices::cairo_pdf(paste0(output_dir,"5drugproportions_",cohort,"_",model,".pdf"),width=28,height=9)
 overall.best.drug
 dev.off()
 
-png(paste0(output_dir,"5drugproportions.png"),width=pngwidth,height=1000,res=pngres,restoreConsole=TRUE)
+png(paste0(output_dir,"5drugproportions_",cohort,"_",model,".png"),width=pngwidth,height=1000,res=pngres,restoreConsole=TRUE)
 overall.best.drug
 dev.off()
 
@@ -1542,17 +2076,501 @@ nrow(md.train.bd)/nrow(md.train.cc)
 best.drug3 <- stackplot.comb(md.train.bd)
 best.drug3
 
-grDevices::cairo_pdf(paste0(output_dir,"5drugproportions_bestdrug3.pdf"),width=24,height=8)
+grDevices::cairo_pdf(paste0(output_dir,"5drugproportions_bestdrug3_",cohort,"_",model,".pdf"),width=28,height=9)
 best.drug3 
 dev.off()
   
-png(paste0(output_dir,"5drugproportions_bestdrug3.png"),width=pngwidth,height=1000,res=pngres,restoreConsole=TRUE)
+png(paste0(output_dir,"5drugproportions_bestdrug3_",cohort,"_",model,".png"),width=pngwidth,height=1000,res=pngres,restoreConsole=TRUE)
 best.drug3
 dev.off()
 
+#Best drug subgroups
+
+table(md.train.bd$bestdrug)
+
+#SUbset those with without a clear best drug
+md.train.bd <- md.train.cc %>% 
+  mutate(best.margin.3 = ifelse(best.margin <= -3, 1,0)) %>%
+  filter(best.margin.3 ==0) 
+
+#Best double drug combos
+md.train.bd <- md.train.cc %>% filter(best.margin > -3 & firstthird.best.margin <= -3)
+table(md.train.bd$bestdrug,md.train.bd$secondbestdrug)
+
+#Best triple drug combos
+md.train.bd <- md.train.cc %>% filter(firstthird.best.margin > -3 & firstfourth.best.margin <= -3)
+table(md.train.bd$secondbestdrug,md.train.bd$thirdbestdrug,md.train.bd$bestdrug)
+
+#Best quad drug combos
+md.train.bd <- md.train.cc %>% filter(firstfourth.best.margin > -3 & firstfifth.best.margin <= -3)
+table(md.train.bd$thirdbestdrug,md.train.bd$fourthbestdrug,md.train.bd$secondbestdrug,md.train.bd$bestdrug)
+
+#No clear best drug
+table(md.train.cc$nobestdrug)
+
+
+
+
 ```
 
-# Validation by drug pair
+## Development set validation
+
+```{r}
+#| label: Development set  validation
+
+#Validation formula drug pair
+    formula2 <- "posthba1cfinal ~ drugclass +
+    drugline +
+    ncurrtx +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
+    sex +
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)"
+
+#Validation formula overall
+    formula3 <-
+    "posthba1cfinal ~ concordant +
+    drugline +
+    ncurrtx +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
+    sex +
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)" 
+
+#Define model
+#m1 <- m1.5; model <- "m1.5"
+
+#Define cohort
+drugline2=0; cohort <- "dev" 
+
+# number of patients
+nrow(md.train.cc)
+
+# Predict outcomes on each drug
+md.train.cc <- model.predict(md.train.cc,m1)
+
+# Overall calibration by mean predictions of other drugs (not optimal but probably conservative)
+
+#Find best drug
+#https://stackoverflow.com/questions/37195322/create-a-new-variable-from-the-minimum-in-r
+setDT(md.train.cc)[, lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+md.train.cc[, bestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+
+#Define concordant and discordant
+md.train.cc <- data.frame(md.train.cc)
+md.train.cc <- md.train.cc %>% 
+  mutate(concordant = if_else(drugclass==bestdrug,1,0))
+
+table(md.train.cc$concordant)
+
+#Test outcome in concordant v discordant
+
+#Compare baseline HbA1c
+md.train.cc %>% group_by(concordant) %>% 
+  dplyr::summarise(meanhb=mean(prehba1c))
+
+#Minimally adjusted
+m.cd <- lm(posthba1cfinal ~ concordant +
+             drugline +
+             ncurrtx + 
+             prehba1c,data=md.train.cc)
+summary(m.cd) 
+
+
+#Adjusted
+m.cd <- lm(as.formula(formula3),data=md.train.cc)
+summary(m.cd)
+confint(m.cd)
+
+est <- m.cd$coefficients[2]
+ci.l <- confint(m.cd)[2]
+ci.u <- confint(m.cd)[2,2]
+
+#define strata 
+# 
+# c1 <- md.train.cc %>%
+#   mutate(DPP4=ifelse(DPP4==lowest.hba1c,NA,DPP4),
+#          SGLT2=ifelse(SGLT2==lowest.hba1c,NA,SGLT2),
+#          SU=ifelse(SU==lowest.hba1c,NA,SU),
+#          TZD=ifelse(TZD==lowest.hba1c,NA,TZD),
+#          GLP1=ifelse(GLP1==lowest.hba1c,NA,GLP1))
+# 
+# c1 <- c1 %>% mutate(mean.others = rowMeans(dplyr::select(.,DPP4:GLP1),na.rm=T),
+#                     hba1c_diff = lowest.hba1c-mean.others,
+#                     hba1c_diff.q = ntile(hba1c_diff, 10))
+# 
+# #define dataset with predicted values
+# t1 <- c1 %>% 
+#   group_by(hba1c_diff.q) %>%
+#   dplyr::summarize(N=length(hba1c_diff),
+#                    hba1c_diff.pred = mean(-hba1c_diff))
+# 
+# #obs vs pred, by decile of predicted treatment difference
+# #For Formula 1-3
+# mnumber = c(1:10)
+# models  <- as.list(1:10)
+# 
+# hba1c_diff.obs.adj <- vector()
+# lower.adj <- vector()
+# upper.adj <- vector() 
+# 
+# #Full
+# for(i in mnumber) {
+#   models[[i]] <- lm(as.formula(formula3),data=c1,subset=hba1c_diff.q==i)
+#   hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+#   confint_all <- confint(models[[i]], levels=0.95)
+#   lower.adj <- append(lower.adj,confint_all[2,1])
+#   upper.adj <- append(upper.adj,confint_all[2,2])
+# }
+# 
+# #Final data.frame  
+# t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+# plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+# 
+# ymin  <- 0;  ymax <- 13
+# 
+# cal.overall <- 
+# ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+#   geom_point(alpha=1) + theme_bw() +
+#   geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+#   ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+#   scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+#   scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+#   # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+#   geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+#   geom_label(aes(x = 1, y = 13, label = paste0("Overall observed benefit ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mmol/mol")), 
+#                hjust = 0, 
+#                vjust = 0.5, 
+#                colour = "#555555", 
+#                fill = "white", 
+#                label.size = NA, 
+#                family="Helvetica", 
+#                size = 6)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".pdf"),width=8,height=8)
+# cal.overall  
+# dev.off()
+# 
+# png(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+# cal.overall  
+# dev.off()
+
+
+# matching validation
+  
+#Match concordant and discordant, with exact matching by baseline HbA1c ventile + all other predictors and covariates
+
+#Define baseline HbA1c ventile
+c1 <- md.train.cc %>% 
+mutate(prehba1c.g=ntile(prehba1c, 20))
+c1 %>% 
+group_by(prehba1c.g) %>%
+dplyr::summarise(min=min(prehba1c),
+                 max=max(prehba1c))
+
+set.seed(19840503)  
+match <- matchit(concordant~
+                 drugline + 
+                 ncurrtx + 
+                 ethnicity +
+                 imd5 +
+                 smoke +
+                 agetx +
+                 t2dmduration +
+                 pretotalcholesterol +
+                 prehdl +
+                 prealt +
+                 preegfr +
+                 prebmi +
+                 prehba1c, 
+               data = c1,  
+               exact = ~ bestdrug + prehba1c.g + sex, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
+               method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #
+               #method = "nearest",distance="glm",ratio=4, replace=TRUE, mahvars = c("prehba1c","drugline","ncurrtx"),caliper=0.01) #, 
+# + sex
+#Match on best drug
+
+matched <- match.data(match)
+summary(match)
+plot(summary(match))
+table(matched$concordant)
+
+m.cd <- lm(posthba1cfinal ~ concordant,data=matched, weights=weights)
+summary(m.cd) 
+
+pred.overall <- m.cd$coefficients[2]
+pred.lci <- confint(m.cd)[2]
+pred.uci <- confint(m.cd)[2,2]
+
+### Prepare paired dataset
+match.t <- get_matches(match)
+table(match.t$concordant)
+
+#Get concordant subset and predicted values for each drug
+match.c <- get_matches(match) %>%
+filter(concordant==1) %>%
+dplyr::select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid, agetx=agetx) %>%
+mutate(subclass=as.numeric(subclass))
+
+#Get discordant subset
+match.d <- get_matches(match) %>%
+filter(concordant==0) %>%
+#filter(drugclass!="DPP4") %>%
+dplyr::select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
+mutate(subclass=as.numeric(subclass))
+
+#Merge
+match.indv <- merge(match.c,match.d,by="subclass")
+
+#Check for duplicate patids (in theory a patient could match to themselves)
+match.indv <- match.indv %>% mutate(dup=identical(match.indv[['patid.c']],match.indv[['patid.d']]))
+table(match.indv$dup)
+
+#Drop if discordant patient receives same drug as concordant patient
+match.indv <- match.indv %>% 
+filter(drugclass!=disc.drugclass)
+#Cannot happen as match on bestdrug
+
+### Define predicted benefit for each pair
+
+#Define predicted outcome for concordant
+match.indv <- match.indv %>%
+mutate(pred.c=pmin(DPP4,SGLT2,SU,TZD,GLP1)) %>%
+#Define predicted outcome for discordant
+mutate(pred.d=ifelse(disc.drugclass=="DPP4",DPP4,
+                     ifelse(disc.drugclass=="SGLT2",SGLT2,
+                            ifelse(disc.drugclass=="SU",SU,
+                                   ifelse(disc.drugclass=="TZD",TZD,GLP1
+                                   ))))) %>%
+#Define predicted benefit
+mutate(pred.benefit=pred.c-pred.d,
+       pred.benefit.q=ntile(-pred.benefit, 10))
+describe(match.indv$pred.benefit)
+table(match.indv$pred.benefit.q)
+
+### Define observed benefit for each pair
+
+#Define observed benefit
+match.indv <- match.indv %>%
+mutate(obs.benefit=posthba1cfinal-disc.posthba1cfinal)
+
+### Mean + CIs, overall and by benefit decile
+
+#Overall
+describe(match.indv$obs.benefit)
+# match.overall <-  CI(match.indv$obs.benefit, ci=0.95,weights=disc.weights)  
+# match.overall
+match.indv %>% dplyr::summarise(wt.mean=weighted.mean(obs.benefit,disc.weights))
+
+#By decile
+match.res <- match.indv %>% group_by(pred.benefit.q) %>% dplyr::summarise(wt.mean=weighted.mean(obs.benefit,disc.weights),
+                                                                        pred = mean(pred.benefit,na.rm=TRUE))
+match.res
+
+#Weighted mean (CIs not straightforward)
+#Weights are by definition 1 unless using N:1 matching
+match.res <- match.indv %>% group_by(pred.benefit.q) %>% 
+dplyr::summarise(
+  mean= mean(obs.benefit),
+  wt.mean=weighted.mean(obs.benefit,disc.weights),
+  pred = mean(pred.benefit,na.rm=TRUE))
+match.res
+
+#Median (IQR)
+match.res <- match.indv %>% group_by(pred.benefit.q) %>% 
+dplyr::summarise(
+  median.obs= median(obs.benefit),
+  median.pred= median(pred.benefit),
+  lower.ci = quantile(obs.benefit,0.25),
+  upper.ci = quantile(obs.benefit,0.75)
+)
+match.res
+
+#Unweighted mean
+match.res <-
+match.indv  %>%
+group_by(pred.benefit.q) %>%
+dplyr::summarise(mean = mean(obs.benefit, na.rm = TRUE),
+                 sd = sd(obs.benefit, na.rm = TRUE),
+                 n = n(),
+                 pred = mean(pred.benefit,na.rm=TRUE))%>%
+mutate(se = sd / sqrt(n),
+       lower.ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+       upper.ci = mean + qt(1 - (0.05 / 2), n - 1) * se)
+
+cal.match <- 
+ggplot(data=match.res,aes(x=-pred,y=-mean)) +
+geom_point(alpha=1) + theme_bw() +
+geom_errorbar(aes(ymin=-upper.ci, ymax=-lower.ci), colour="black", width=.1) +
+ylab("Average HbA1c benefit (Unadjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+scale_x_continuous(limits=c(0,15),breaks=seq(0,15,by=2)) +
+scale_y_continuous(limits=c(0,15),breaks=seq(0,15,by=2)) +
+coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+panel_border(remove=T) +
+# scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+# scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+geom_label(aes(x = 0.5, y = 14.5, label = paste0("Average benefit [unadjusted] ", round(-pred.overall,1)," (95%CI ",round(-pred.uci,1),"-",round(-pred.lci,1),") mmol/mol \n",
+                                             "(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")),
+           hjust = 0, 
+           vjust = 0.5, 
+           colour = "#555555", 
+           fill = "white", 
+           label.size = NA, 
+           family="Helvetica", 
+           size = 4.5)
+
+grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".pdf"),width=8,height=8)
+cal.match
+dev.off()
+
+png(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+cal.match
+dev.off()
+
+#Double robust adjustment
+    match.indv.c <- match.indv %>% select(subclass,patid.c,pred.benefit.q)
+    match.indv.d <- match.indv %>% select(subclass,patid.d,pred.benefit.q)
+    
+    match.c <- get_matches(match) %>%
+    filter(concordant==1) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.c=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.c <- merge(match.c,match.indv.c,by=c("subclass","patid.c"))  %>% dplyr::select(-patid.c)            
+                  
+    match.d <- get_matches(match) %>%
+    filter(concordant==0) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.d=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.d <- merge(match.d,match.indv.d,by=c("subclass","patid.d")) %>% dplyr::select(-patid.d)               
+    
+    match.final <- rbind(match.c,match.d)
+    
+    #Adjusted
+    m.cd <- lm(as.formula(formula3),data= match.final)
+    summary(m.cd)
+    confint(m.cd)
+    
+    est <- m.cd$coefficients[2]
+    ci.l <- confint(m.cd)[2]
+    ci.u <- confint(m.cd)[2,2]
+
+    #obs vs pred, by decile of predicted benefit
+    #For Formula 1-3
+    mnumber = c(1:10)
+    models  <- as.list(1:10)
+    
+    hba1c_diff.obs.adj <- vector()
+    lower.adj <- vector()
+    upper.adj <- vector() 
+    
+    #Full
+    for(i in mnumber) {
+      models[[i]] <- lm(as.formula(formula3),data=match.final,subset=pred.benefit.q==i)
+      hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+      confint_all <- confint(models[[i]], levels=0.95)
+      lower.adj <- append(lower.adj,confint_all[2,1])
+      upper.adj <- append(upper.adj,confint_all[2,2])
+    }
+    
+    #define dataset with predicted values
+    t1 <- match.indv %>% 
+      group_by(pred.benefit.q) %>%
+      dplyr::summarize(N=length(pred.benefit),
+                       hba1c_diff.pred = mean(-pred.benefit))
+    
+    #Final data.frame  
+    t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+    plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+    
+    ymin  <- 0;  ymax <- 15
+    
+    cal.match.adj <- 
+    ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+      geom_point(alpha=1) + theme_bw() +
+      geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+      ylab("Average HbA1c benefit (Adjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+      scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+      panel_border(remove=T) +
+      # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+      geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+      geom_label(aes(x = 1, y = 14.5, label = paste0("Average benefit [adjusted] ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mol/mol \n","(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")), 
+                   hjust = 0, 
+                   vjust = 0.5, 
+                   colour = "#555555", 
+                   fill = "white", 
+                   label.size = NA, 
+                   family="Helvetica", 
+                   size = 4.5)
+      
+    
+      png(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+      cal.match.adj
+      dev.off()
+
+      grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_",cohort,"_",model,".pdf"),width=8,height=8)
+      cal.match.adj
+      dev.off()
+      
+#Matched, by age category
+
+  describe(match.indv$agetx)
+  
+  match.indv <- match.indv %>% 
+    mutate(agecat = cut(agetx,
+                        breaks=c(18,40,50,60,70,80),
+                        labels=c("18-39", "40-49", "50-59", "60-69", "70-79")))
+  match.indv %>% group_by(agecat) %>% dplyr::summarize(min=min(agetx),max=max(agetx),n=n())
+  
+  #Unweighted mean
+  match.indv  %>%
+  group_by(agecat) %>%
+  dplyr::summarise(mean = mean(obs.benefit, na.rm = TRUE),
+                   sd = sd(obs.benefit, na.rm = TRUE),
+                   n = n(),
+                   pred = mean(pred.benefit,na.rm=TRUE))%>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = mean + qt(1 - (0.05 / 2), n - 1) * se)
+  
+# Calibration by drug pair 
+
+# Derive average treatment effect per decile for each drug combination
+val.plot <- validation.comb(md.train.cc)
+
+grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".pdf"),width=24,height=12)
+val.plot  
+dev.off()
+  
+png(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".png"),width=4000,height=2000,res=pngres,restoreConsole=TRUE)
+val.plot
+dev.off()
+```
 
 ## Geographical validation
 
@@ -1566,35 +2584,38 @@ dev.off()
     ethnicity +
     imd5 +
     smoke +
-    rcs(hba1cmonth,3) +
-    rcs(agetx,3) +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
     sex +
-    rcs(t2dmduration,3) +
-    rcs(pretotalcholesterol,3) +
-    rcs(prehdl,3) +
-    rcs(prealt,3) +
-    rcs(preegfr,3) +
-    rcs(prebmi,3) +
-    rcs(prehba1c,3)"
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)"
 
 #Validation formula overall
     formula3 <-
     "posthba1cfinal ~ concordant +
     drugline +
     ncurrtx +
-    rcs(hba1cmonth,3) +
-    rcs(agetx,3) +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
     sex +
-    rcs(t2dmduration,3) +
-    rcs(pretotalcholesterol,3) +
-    rcs(prehdl,3) +
-    rcs(prealt,3) +
-    rcs(preegfr,3) +
-    rcs(prebmi,3) +
-    rcs(prehba1c,3)" 
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)" 
 
 #Define model
-m1 <- m1.5; model <- "m1.5"
+#m1 <- m1.5; model <- "m1.5"
 
 #Define cohort
 
@@ -1661,7 +2682,7 @@ c1 <- md.test.cc %>%
          TZD=ifelse(TZD==lowest.hba1c,NA,TZD),
          GLP1=ifelse(GLP1==lowest.hba1c,NA,GLP1))
 
-c1 <- c1 %>% mutate(mean.others = rowMeans(select(.,DPP4:GLP1),na.rm=T),
+c1 <- c1 %>% mutate(mean.others = rowMeans(dplyr::select(.,DPP4:GLP1),na.rm=T),
                     hba1c_diff = lowest.hba1c-mean.others,
                     hba1c_diff.q = ntile(hba1c_diff, 10))
 
@@ -1744,7 +2765,6 @@ match <- matchit(concordant~
                  imd5 +
                  smoke +
                  agetx +
-                 sex +
                  t2dmduration +
                  pretotalcholesterol +
                  prehdl +
@@ -1753,8 +2773,11 @@ match <- matchit(concordant~
                  prebmi +
                  prehba1c, 
                data = c1,  
-               exact = ~ bestdrug + prehba1c.g, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
-               method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #, caliper=0.01
+               exact = ~ bestdrug + prehba1c.g + sex, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
+               method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #
+               #method = "nearest",distance="glm",ratio=4, replace=TRUE, mahvars = c("prehba1c","drugline","ncurrtx"),caliper=0.01) #, 
+# + sex
+#Match on best drug
 
 matched <- match.data(match)
 summary(match)
@@ -1775,14 +2798,14 @@ table(match.t$concordant)
 #Get concordant subset and predicted values for each drug
 match.c <- get_matches(match) %>%
 filter(concordant==1) %>%
-select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid) %>%
+dplyr::select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid, agetx=agetx) %>%
 mutate(subclass=as.numeric(subclass))
 
 #Get discordant subset
 match.d <- get_matches(match) %>%
 filter(concordant==0) %>%
 #filter(drugclass!="DPP4") %>%
-select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
+dplyr::select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
 mutate(subclass=as.numeric(subclass))
 
 #Merge
@@ -1868,22 +2891,24 @@ cal.match <-
 ggplot(data=match.res,aes(x=-pred,y=-mean)) +
 geom_point(alpha=1) + theme_bw() +
 geom_errorbar(aes(ymin=-upper.ci, ymax=-lower.ci), colour="black", width=.1) +
-ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
-scale_x_continuous(limits=c(0,12),breaks=seq(0,12,by=2)) +
-scale_y_continuous(limits=c(0,12),breaks=seq(0,12,by=2)) +
+ylab("Average HbA1c benefit (Unadjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+scale_x_continuous(limits=c(0,15),breaks=seq(0,15,by=2)) +
+scale_y_continuous(limits=c(0,15),breaks=seq(0,15,by=2)) +
+coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+panel_border(remove=T) +
 # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
 # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
 theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
 geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
-geom_label(aes(x = 0.5, y = 11, label = paste0("Observed benefit ", round(-pred.overall,1)," (95%CI ",round(-pred.uci,1),"-",round(-pred.lci,1),") mmol/mol \n",
-                                             "(n=",nrow(match.c)," model-concordant, n=",nrow(match.d)," matched-discordant)")),
+geom_label(aes(x = 0.5, y = 14.5, label = paste0("Average benefit [unadjusted] ", round(-pred.overall,1)," (95%CI ",round(-pred.uci,1),"-",round(-pred.lci,1),") mmol/mol \n",
+                                             "(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")),
            hjust = 0, 
            vjust = 0.5, 
            colour = "#555555", 
            fill = "white", 
            label.size = NA, 
            family="Helvetica", 
-           size = 6)
+           size = 4.5)
 
 grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".pdf"),width=8,height=8)
 cal.match
@@ -1893,6 +2918,115 @@ png(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".png
 cal.match
 dev.off()
 
+#Double robust adjustment
+    match.indv.c <- match.indv %>% select(subclass,patid.c,pred.benefit.q)
+    match.indv.d <- match.indv %>% select(subclass,patid.d,pred.benefit.q)
+    
+    match.c <- get_matches(match) %>%
+    filter(concordant==1) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.c=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.c <- merge(match.c,match.indv.c,by=c("subclass","patid.c"))  %>% dplyr::select(-patid.c)            
+                  
+    match.d <- get_matches(match) %>%
+    filter(concordant==0) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.d=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.d <- merge(match.d,match.indv.d,by=c("subclass","patid.d")) %>% dplyr::select(-patid.d)               
+    
+    match.final <- rbind(match.c,match.d)
+    
+    #Adjusted
+    m.cd <- lm(as.formula(formula3),data= match.final)
+    summary(m.cd)
+    confint(m.cd)
+    
+    est <- m.cd$coefficients[2]
+    ci.l <- confint(m.cd)[2]
+    ci.u <- confint(m.cd)[2,2]
+
+    #obs vs pred, by decile of predicted benefit
+    #For Formula 1-3
+    mnumber = c(1:10)
+    models  <- as.list(1:10)
+    
+    hba1c_diff.obs.adj <- vector()
+    lower.adj <- vector()
+    upper.adj <- vector() 
+    
+    #Full
+    for(i in mnumber) {
+      models[[i]] <- lm(as.formula(formula3),data=match.final,subset=pred.benefit.q==i)
+      hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+      confint_all <- confint(models[[i]], levels=0.95)
+      lower.adj <- append(lower.adj,confint_all[2,1])
+      upper.adj <- append(upper.adj,confint_all[2,2])
+    }
+    
+    #define dataset with predicted values
+    t1 <- match.indv %>% 
+      group_by(pred.benefit.q) %>%
+      dplyr::summarize(N=length(pred.benefit),
+                       hba1c_diff.pred = mean(-pred.benefit))
+    
+    #Final data.frame  
+    t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+    plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+    
+    ymin  <- 0;  ymax <- 15
+    
+    cal.match.adj <- 
+    ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+      geom_point(alpha=1) + theme_bw() +
+      geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+      ylab("Average HbA1c benefit (Adjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+      scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+      panel_border(remove=T) +
+      # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+      geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+      geom_label(aes(x = 1, y = 14.5, label = paste0("Average benefit [adjusted] ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mol/mol \n","(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")), 
+                   hjust = 0, 
+                   vjust = 0.5, 
+                   colour = "#555555", 
+                   fill = "white", 
+                   label.size = NA, 
+                   family="Helvetica", 
+                   size = 4.5)
+      
+    
+      png(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+      cal.match.adj
+      dev.off()
+
+      grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_",cohort,"_",model,".pdf"),width=8,height=8)
+      cal.match.adj
+      dev.off()
+      
+#Matched, by age category
+
+  describe(match.indv$agetx)
+  
+  match.indv <- match.indv %>% 
+    mutate(agecat = cut(agetx,
+                        breaks=c(18,40,50,60,70,80),
+                        labels=c("18-39", "40-49", "50-59", "60-69", "70-79")))
+  match.indv %>% group_by(agecat) %>% dplyr::summarize(min=min(agetx),max=max(agetx),n=n())
+  
+  #Unweighted mean
+  match.indv  %>%
+  group_by(agecat) %>%
+  dplyr::summarise(mean = mean(obs.benefit, na.rm = TRUE),
+                   sd = sd(obs.benefit, na.rm = TRUE),
+                   n = n(),
+                   pred = mean(pred.benefit,na.rm=TRUE))%>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = mean + qt(1 - (0.05 / 2), n - 1) * se)
+  
 # Calibration by drug pair 
 
 # Derive average treatment effect per decile for each drug combination
@@ -1919,32 +3053,35 @@ dev.off()
     ethnicity +
     imd5 +
     smoke +
-    rcs(hba1cmonth,3) +
-    rcs(agetx,3) +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
     sex +
-    rcs(t2dmduration,3) +
-    rcs(pretotalcholesterol,3) +
-    rcs(prehdl,3) +
-    rcs(prealt,3) +
-    rcs(preegfr,3) +
-    rcs(prebmi,3) +
-    rcs(prehba1c,3)"
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)"
 
 #Validation formula overall
     formula3 <-
     "posthba1cfinal ~ concordant +
     drugline +
     ncurrtx +
-    rcs(hba1cmonth,3) +
-    rcs(agetx,3) +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
     sex +
-    rcs(t2dmduration,3) +
-    rcs(pretotalcholesterol,3) +
-    rcs(prehdl,3) +
-    rcs(prealt,3) +
-    rcs(preegfr,3) +
-    rcs(prebmi,3) +
-    rcs(prehba1c,3)" 
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)" 
 
 #By cal year
 md.test <- md.test.2004.yr; drugline2=0; cohort <- "calyr"
@@ -2009,7 +3146,7 @@ c1 <- md.test.cc %>%
          TZD=ifelse(TZD==lowest.hba1c,NA,TZD),
          GLP1=ifelse(GLP1==lowest.hba1c,NA,GLP1))
 
-c1 <- c1 %>% mutate(mean.others = rowMeans(select(.,DPP4:GLP1),na.rm=T),
+c1 <- c1 %>% mutate(mean.others = rowMeans(dplyr::select(.,DPP4:GLP1),na.rm=T),
                     hba1c_diff = lowest.hba1c-mean.others,
                     hba1c_diff.q = ntile(hba1c_diff, 10))
 
@@ -2047,9 +3184,9 @@ cal.overall <-
 ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
   geom_point(alpha=1) + theme_bw() +
   geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
-  ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
-  scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
-  scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+  ylab("Average HbA1c benefit (Unadjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+  scale_x_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+  scale_y_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
   # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
   # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
   theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
@@ -2092,7 +3229,6 @@ match <- matchit(concordant~
                  imd5 +
                  smoke +
                  agetx +
-                 sex +
                  t2dmduration +
                  pretotalcholesterol +
                  prehdl +
@@ -2101,7 +3237,7 @@ match <- matchit(concordant~
                  prebmi +
                  prehba1c, 
                data = c1,  
-               exact = ~ bestdrug + prehba1c.g, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
+               exact = ~ bestdrug + prehba1c.g + sex, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
                method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #, caliper=0.01
 
 matched <- match.data(match)
@@ -2123,14 +3259,14 @@ table(match.t$concordant)
 #Get concordant subset and predicted values for each drug
 match.c <- get_matches(match) %>%
 filter(concordant==1) %>%
-select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid) %>%
+dplyr::select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid) %>%
 mutate(subclass=as.numeric(subclass))
 
 #Get discordant subset
 match.d <- get_matches(match) %>%
 filter(concordant==0) %>%
 #filter(drugclass!="DPP4") %>%
-select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
+dplyr::select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
 mutate(subclass=as.numeric(subclass))
 
 #Merge
@@ -2216,22 +3352,25 @@ cal.match <-
 ggplot(data=match.res,aes(x=-pred,y=-mean)) +
 geom_point(alpha=1) + theme_bw() +
 geom_errorbar(aes(ymin=-upper.ci, ymax=-lower.ci), colour="black", width=.1) +
-ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
-scale_x_continuous(limits=c(0,12),breaks=seq(0,12,by=2)) +
-scale_y_continuous(limits=c(0,12),breaks=seq(0,12,by=2)) +
+ylab("Average HbA1c benefit (Unadjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+scale_x_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+scale_y_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+panel_border(remove=T) +
 # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
 # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
 theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
 geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
-geom_label(aes(x = 0.5, y = 11, label = paste0("Observed benefit ", round(-pred.overall,1)," (95%CI ",round(-pred.uci,1),"-",round(-pred.lci,1),") mmol/mol \n",
-                                             "(n=",nrow(match.c)," model-concordant, n=",nrow(match.d)," matched-discordant)")),
+geom_label(aes(x = 0.5, y = 14.5, label = paste0("Average benefit [unadjusted] ", round(-pred.overall,1),
+" (95%CI ",round(-pred.uci,1),"-",
+round(-pred.lci,1),") mmol/mol \n", "(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")),
            hjust = 0, 
            vjust = 0.5, 
            colour = "#555555", 
            fill = "white", 
            label.size = NA, 
            family="Helvetica", 
-           size = 6)
+           size = 4.5)
 
 grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".pdf"),width=8,height=8)
 cal.match
@@ -2240,6 +3379,168 @@ dev.off()
 png(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
 cal.match
 dev.off()
+
+#Double robust adjustment
+    match.indv.c <- match.indv %>% select(subclass,patid.c,pred.benefit.q)
+    match.indv.d <- match.indv %>% select(subclass,patid.d,pred.benefit.q)
+    
+    match.c <- get_matches(match) %>%
+    filter(concordant==1) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.c=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.c <- merge(match.c,match.indv.c,by=c("subclass","patid.c"))  %>% dplyr::select(-patid.c)            
+                  
+    match.d <- get_matches(match) %>%
+    filter(concordant==0) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.d=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.d <- merge(match.d,match.indv.d,by=c("subclass","patid.d")) %>% dplyr::select(-patid.d)               
+    
+    match.final <- rbind(match.c,match.d)
+    
+    #Overall
+    #Adjusted
+    m.cd <- lm(as.formula(formula3),data= match.final)
+    summary(m.cd)
+    confint(m.cd)
+    
+    est <- m.cd$coefficients[2]
+    ci.l <- confint(m.cd)[2]
+    ci.u <- confint(m.cd)[2,2]
+
+    #obs vs pred, by decile of predicted benefit
+    #For Formula 1-3
+    mnumber = c(1:10)
+    models  <- as.list(1:10)
+    
+    hba1c_diff.obs.adj <- vector()
+    lower.adj <- vector()
+    upper.adj <- vector() 
+    
+    #Full
+    for(i in mnumber) {
+      models[[i]] <- lm(as.formula(formula3),data=match.final,subset=pred.benefit.q==i)
+      hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+      confint_all <- confint(models[[i]], levels=0.95)
+      lower.adj <- append(lower.adj,confint_all[2,1])
+      upper.adj <- append(upper.adj,confint_all[2,2])
+    }
+    
+    #define dataset with predicted values
+    t1 <- match.indv %>% 
+      group_by(pred.benefit.q) %>%
+      dplyr::summarize(N=length(pred.benefit),
+                       hba1c_diff.pred = mean(-pred.benefit))
+    
+    #Final data.frame  
+    t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+    plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+    
+    ymin  <- 0;  ymax <- 15
+    
+    cal.match.adj <- 
+    ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+      geom_point(alpha=1) + theme_bw() +
+      geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+      ylab("Average HbA1c benefit (Adjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+      scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+      panel_border(remove=T) +
+      # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+      geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+      geom_label(aes(x = 1, y = 14.5, label = paste0("Average benefit [adjusted] ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mol/mol \n","(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")), 
+                   hjust = 0, 
+                   vjust = 0.5, 
+                   colour = "#555555", 
+                   fill = "white", 
+                   label.size = NA, 
+                   family="Helvetica", 
+                   size = 4.5)
+
+      png(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+      cal.match.adj
+      dev.off()
+
+      grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_",cohort,"_",model,".pdf"),width=8,height=8)
+      cal.match.adj
+      dev.off()
+# Derive average treatment effect per decile for each drug combination
+val.plot <- validation.comb.notzd(md.test.cc)
+
+grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".pdf"),width=24,height=12)
+val.plot
+dev.off()
+  
+png(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".png"),width=4000,height=2000,res=pngres,restoreConsole=TRUE)
+val.plot
+dev.off()
+```
+
+## Combined validation for drug pairs
+
+```{r}
+#| label: Combined validation for drug pairs
+
+#Validation formula drug pair
+    formula2 <- "posthba1cfinal ~ drugclass +
+    drugline +
+    ncurrtx +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
+    sex +
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)"
+
+#Validation formula overall
+    formula3 <-
+    "posthba1cfinal ~ concordant +
+    drugline +
+    ncurrtx +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
+    sex +
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)" 
+
+#Both validatio datasets
+md.test.yr <- md.test.2004.yr; drugline2=0; md.test.yr$valset <- "yr"
+md.test.g <- md.test.2004.g; drugline2=0; md.test.g$valset <- "g"
+md.test <- rbind(md.test.yr,md.test.g); cohort ="comb"
+table(md.test$valset)
+
+# cohort prep
+md.test <- md.test  %>% mutate(drugclass=factor(drugclass,
+                                                  levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+md.test.cc <- md.test %>% filter(complete.cases(pretotalcholesterol,
+                                                  prehdl,
+                                                  prealt,
+                                                  preegfr,
+                                                  prebmi))
+# number of patients
+nrow(md.test.cc)
+table(md.test.cc$valset)
+
+# Predict outcomes on each drug
+md.test.cc <- model.predict(md.test.cc,m1)
 
 # Derive average treatment effect per decile for each drug combination
 val.plot <- validation.comb(md.test.cc)
@@ -2251,6 +3552,7 @@ dev.off()
 png(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".png"),width=4000,height=2000,res=pngres,restoreConsole=TRUE)
 val.plot
 dev.off()
+
 ```
 
 ## Geographical validation, second-line only
@@ -2258,40 +3560,1347 @@ dev.off()
 ```{r}
 #| label: Geographical validation, second-line only
 
+# #Validation formula drug pair
+#     formula2 <- "posthba1cfinal ~ drugclass +
+#     ncurrtx +
+#     ethnicity +
+#     imd5 +
+#     smoke +
+#     rcs(hba1cmonth,3) +
+#     rcs(agetx,3) +
+#     sex +
+#     rcs(t2dmduration,3) +
+#     rcs(pretotalcholesterol,3) +
+#     rcs(prehdl,3) +
+#     rcs(prealt,3) +
+#     rcs(preegfr,3) +
+#     rcs(prebmi,3) +
+#     rcs(prehba1c,3)"
+# 
+# #Validation formula overall
+#     formula3 <-
+#     "posthba1cfinal ~ concordant +
+#     ncurrtx +
+#     rcs(hba1cmonth,3) +
+#     rcs(agetx,3) +
+#     sex +
+#     rcs(t2dmduration,3) +
+#     rcs(pretotalcholesterol,3) +
+#     rcs(prehdl,3) +
+#     rcs(prealt,3) +
+#     rcs(preegfr,3) +
+#     rcs(prebmi,3) +
+#     rcs(prehba1c,3)"
+# 
+# #By geog, second-line
+# md.test <- md.test %>% filter(drugline==2)  ; drugline2=1; cohort <- "geog2ndline"
+# 
+# # cohort prep
+# md.test <- md.test  %>% mutate(drugclass=factor(drugclass,
+#                                                   levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+# md.test.cc <- md.test %>% filter(complete.cases(pretotalcholesterol,
+#                                                   prehdl,
+#                                                   prealt,
+#                                                   preegfr,
+#                                                   prebmi))
+# # number of patients
+# nrow(md.test.cc)
+# 
+# # Predict outcomes on each drug
+# md.test.cc <- model.predict(md.test.cc,m1)
+# 
+# # Overall calibration by mean predictions of other drugs (not optimal but probably conservative)
+# 
+# #Find best drug
+# #https://stackoverflow.com/questions/37195322/create-a-new-variable-from-the-minimum-in-r
+# setDT(md.test.cc)[, lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+# md.test.cc[, bestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+# 
+# #Define concordant and discordant
+# md.test.cc <- data.frame(md.test.cc)
+# md.test.cc <- md.test.cc %>% 
+#   mutate(concordant = if_else(drugclass==bestdrug,1,0))
+# 
+# table(md.test.cc$concordant)
+# 
+# #Test outcome in concordant v discordant
+# 
+# #Compare baseline HbA1c
+# md.test.cc %>% group_by(concordant) %>% 
+#   dplyr::summarise(meanhb=mean(prehba1c))
+# 
+# #Minimally adjusted
+# m.cd <- lm(posthba1cfinal ~ concordant +
+#              ncurrtx + 
+#              prehba1c,data=md.test.cc)
+# summary(m.cd) 
+# 
+# 
+# #Adjusted
+# m.cd <- lm(as.formula(formula3),data=md.test.cc)
+# summary(m.cd)
+# confint(m.cd)
+# 
+# est <- m.cd$coefficients[2]
+# ci.l <- confint(m.cd)[2]
+# ci.u <- confint(m.cd)[2,2]
+# 
+# #define strata 
+# 
+# c1 <- md.test.cc %>%
+#   mutate(DPP4=ifelse(DPP4==lowest.hba1c,NA,DPP4),
+#          SGLT2=ifelse(SGLT2==lowest.hba1c,NA,SGLT2),
+#          SU=ifelse(SU==lowest.hba1c,NA,SU),
+#          TZD=ifelse(TZD==lowest.hba1c,NA,TZD),
+#          GLP1=ifelse(GLP1==lowest.hba1c,NA,GLP1))
+# 
+# c1 <- c1 %>% mutate(mean.others = rowMeans(select(.,DPP4:GLP1),na.rm=T),
+#                     hba1c_diff = lowest.hba1c-mean.others,
+#                     hba1c_diff.q = ntile(hba1c_diff, 10))
+# 
+# #define dataset with predicted values
+# t1 <- c1 %>% 
+#   group_by(hba1c_diff.q) %>%
+#   dplyr::summarize(N=length(hba1c_diff),
+#                    hba1c_diff.pred = mean(-hba1c_diff))
+# 
+# #obs vs pred, by decile of predicted treatment difference
+# #For Formula 1-3
+# mnumber = c(1:10)
+# models  <- as.list(1:10)
+# 
+# hba1c_diff.obs.adj <- vector()
+# lower.adj <- vector()
+# upper.adj <- vector() 
+# 
+# #Full
+# for(i in mnumber) {
+#   models[[i]] <- lm(as.formula(formula3),data=c1,subset=hba1c_diff.q==i)
+#   hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+#   confint_all <- confint(models[[i]], levels=0.95)
+#   lower.adj <- append(lower.adj,confint_all[2,1])
+#   upper.adj <- append(upper.adj,confint_all[2,2])
+# }
+# 
+# #Final data.frame  
+# t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+# plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+# 
+# ymin  <- 0;  ymax <- 13
+# 
+# cal.overall <- 
+# ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+#   geom_point(alpha=1) + theme_bw() +
+#   geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+#   ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+#   scale_x_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+#   scale_y_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+#   # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+#   geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+#   geom_label(aes(x = 1, y = 13, label = paste0("Overall observed benefit ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mmol/mol")), 
+#                hjust = 0, 
+#                vjust = 0.5, 
+#                colour = "#555555", 
+#                fill = "white", 
+#                label.size = NA, 
+#                family="Helvetica", 
+#                size = 6)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".pdf"),width=8,height=8)
+# cal.overall  
+# dev.off()
+# 
+# png(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+# cal.overall  
+# dev.off()
+# 
+# # matching validation
+#   
+# #Match concordant and discordant, with exact matching by baseline HbA1c ventile + all other predictors and covariates
+# 
+# #Define baseline HbA1c ventile
+# c1 <- md.test.cc %>% 
+# mutate(prehba1c.g=ntile(prehba1c, 20))
+# c1 %>% 
+# group_by(prehba1c.g) %>%
+# dplyr::summarise(min=min(prehba1c),
+#                  max=max(prehba1c))
+# 
+# set.seed(19840503)  
+# match <- matchit(concordant~
+#                  ncurrtx + 
+#                  ethnicity +
+#                  imd5 +
+#                  smoke +
+#                  agetx +
+#                  sex +
+#                  t2dmduration +
+#                  pretotalcholesterol +
+#                  prehdl +
+#                  prealt +
+#                  preegfr +
+#                  prebmi +
+#                  prehba1c, 
+#                data = c1,  
+#                exact = ~ bestdrug + prehba1c.g, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
+#                method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #, caliper=0.01
+# 
+# matched <- match.data(match)
+# summary(match)
+# plot(summary(match))
+# table(matched$concordant)
+# 
+# m.cd <- lm(posthba1cfinal ~ concordant,data=matched, weights=weights)
+# summary(m.cd) 
+# 
+# pred.overall <- m.cd$coefficients[2]
+# pred.lci <- confint(m.cd)[2]
+# pred.uci <- confint(m.cd)[2,2]
+# 
+# ### Prepare paired dataset
+# match.t <- get_matches(match)
+# table(match.t$concordant)
+# 
+# #Get concordant subset and predicted values for each drug
+# match.c <- get_matches(match) %>%
+# filter(concordant==1) %>%
+# select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid) %>%
+# mutate(subclass=as.numeric(subclass))
+# 
+# #Get discordant subset
+# match.d <- get_matches(match) %>%
+# filter(concordant==0) %>%
+# #filter(drugclass!="DPP4") %>%
+# select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
+# mutate(subclass=as.numeric(subclass))
+# 
+# #Merge
+# match.indv <- merge(match.c,match.d,by="subclass")
+# 
+# #Check for duplicate patids (in theory a patient could match to themselves)
+# match.indv <- match.indv %>% mutate(dup=identical(match.indv[['patid.c']],match.indv[['patid.d']]))
+# table(match.indv$dup)
+# 
+# #Drop if discordant patient receives same drug as concordant patient
+# match.indv <- match.indv %>% 
+# filter(drugclass!=disc.drugclass)
+# #Cannot happen as match on bestdrug
+# 
+# ### Define predicted benefit for each pair
+# 
+# #Define predicted outcome for concordant
+# match.indv <- match.indv %>%
+# mutate(pred.c=pmin(DPP4,SGLT2,SU,TZD,GLP1)) %>%
+# #Define predicted outcome for discordant
+# mutate(pred.d=ifelse(disc.drugclass=="DPP4",DPP4,
+#                      ifelse(disc.drugclass=="SGLT2",SGLT2,
+#                             ifelse(disc.drugclass=="SU",SU,
+#                                    ifelse(disc.drugclass=="TZD",TZD,GLP1
+#                                    ))))) %>%
+# #Define predicted benefit
+# mutate(pred.benefit=pred.c-pred.d,
+#        pred.benefit.q=ntile(-pred.benefit, 10))
+# describe(match.indv$pred.benefit)
+# table(match.indv$pred.benefit.q)
+# 
+# ### Define observed benefit for each pair
+# 
+# #Define observed benefit
+# match.indv <- match.indv %>%
+# mutate(obs.benefit=posthba1cfinal-disc.posthba1cfinal)
+# 
+# ### Mean + CIs, overall and by benefit decile
+# 
+# #Overall
+# describe(match.indv$obs.benefit)
+# # match.overall <-  CI(match.indv$obs.benefit, ci=0.95,weights=disc.weights)  
+# # match.overall
+# match.indv %>% dplyr::summarise(wt.mean=weighted.mean(obs.benefit,disc.weights))
+# 
+# #By decile
+# match.res <- match.indv %>% group_by(pred.benefit.q) %>% dplyr::summarise(wt.mean=weighted.mean(obs.benefit,disc.weights),
+#                                                                         pred = mean(pred.benefit,na.rm=TRUE))
+# match.res
+# 
+# #Weighted mean (CIs not straightforward)
+# #Weights are by definition 1 unless using N:1 matching
+# match.res <- match.indv %>% group_by(pred.benefit.q) %>% 
+# dplyr::summarise(
+#   mean= mean(obs.benefit),
+#   wt.mean=weighted.mean(obs.benefit,disc.weights),
+#   pred = mean(pred.benefit,na.rm=TRUE))
+# match.res
+# 
+# #Median (IQR)
+# match.res <- match.indv %>% group_by(pred.benefit.q) %>% 
+# dplyr::summarise(
+#   median.obs= median(obs.benefit),
+#   median.pred= median(pred.benefit),
+#   lower.ci = quantile(obs.benefit,0.25),
+#   upper.ci = quantile(obs.benefit,0.75)
+# )
+# match.res
+# 
+# #Unweighted mean
+# match.res <-
+# match.indv  %>%
+# group_by(pred.benefit.q) %>%
+# dplyr::summarise(mean = mean(obs.benefit, na.rm = TRUE),
+#                  sd = sd(obs.benefit, na.rm = TRUE),
+#                  n = n(),
+#                  pred = mean(pred.benefit,na.rm=TRUE))%>%
+# mutate(se = sd / sqrt(n),
+#        lower.ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+#        upper.ci = mean + qt(1 - (0.05 / 2), n - 1) * se)
+# 
+# cal.match <- 
+# ggplot(data=match.res,aes(x=-pred,y=-mean)) +
+# geom_point(alpha=1) + theme_bw() +
+# geom_errorbar(aes(ymin=-upper.ci, ymax=-lower.ci), colour="black", width=.1) +
+# ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+# scale_x_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+# scale_y_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+# # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+# # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+# theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+# geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+# geom_label(aes(x = 0.5, y = 11, label = paste0("Observed benefit ", round(-pred.overall,1)," (95%CI ",round(-pred.uci,1),"-",round(-pred.lci,1),") mmol/mol \n",
+#                                              "(n=",nrow(match.c)," model-concordant, n=",nrow(match.d)," matched-discordant)")),
+#            hjust = 0, 
+#            vjust = 0.5, 
+#            colour = "#555555", 
+#            fill = "white", 
+#            label.size = NA, 
+#            family="Helvetica", 
+#            size = 6)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".pdf"),width=8,height=8)
+# cal.match
+# dev.off()
+# 
+# png(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+# cal.match
+# dev.off()
+# 
+# # Calibration by drug pair 
+# 
+# # Derive average treatment effect per decile for each drug combination
+# val.plot <- validation.comb(md.test.cc)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".pdf"),width=24,height=12)
+# val.plot
+# dev.off()
+#   
+# png(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".png"),width=4000,height=2000,res=pngres,restoreConsole=TRUE)
+# val.plot 
+# dev.off()
+```
+
+## Model comparison summary stats
+
+```{r}
+#| label: Compare model performance
+
+# #DEV
+# # number of patients
+# nrow(md.train.cc)
+# ddist <- datadist(md.train.cc); options(datadist='ddist') 
+# 
+# # Predict outcomes for each model
+# md.train.cc$pred.m1.3 <- predict(m1.3,md.train.cc)
+# md.train.cc$pred.m1.5 <- predict(m1.5,md.train.cc)
+# md.train.cc$pred.m1.5.age <- predict(m1.5.age,md.train.cc)
+# 
+# # RMSE for each model
+# md.train.cc %>% summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.3)^2)))
+# md.train.cc %>% summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5)^2)))
+# md.train.cc %>% summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5.age)^2)))
+# 
+# # RMSE for each model by drug
+# md.train.cc %>% group_by(drugclass) %>%
+#   dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.3)^2)))
+# md.train.cc %>% group_by(drugclass) %>%
+#   dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5)^2)))
+# md.train.cc %>% group_by(drugclass) %>%
+#   dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5.age)^2)))
+# 
+# #R2
+# rsq <- function (x, y) cor(x, y) ^ 2
+# rsq(md.train.cc$posthba1cfinal,md.train.cc$pred.m1.3)
+# rsq(md.train.cc$posthba1cfinal,md.train.cc$pred.m1.5)
+# rsq(md.train.cc$posthba1cfinal,md.train.cc$pred.m1.5.age)
+# 
+# #Calibration #Cal in the large = intercept, slope = pred
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.train.cc)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.train.cc)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.train.cc)
+# 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx>69)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx>69)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx>69)
+# 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx<59)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx<59)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx<59)
+# 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx>58&agetx<70)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx>58&agetx<70)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.train.cc,subset=agetx>58&agetx<70)
+# 
+# #TEST
+# #By geog
+# md.test <- md.test.2004.g; drugline2=0; cohort <- "geog" 
+# 
+# # cohort prep
+# md.test <- md.test  %>% mutate(drugclass=factor(drugclass,
+#                                                   levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+# md.test.cc <- md.test %>% filter(complete.cases(pretotalcholesterol,
+#                                                   prehdl,
+#                                                   prealt,
+#                                                   preegfr,
+#                                                   prebmi))
+# # number of patients
+# nrow(md.test.cc)
+# 
+# md.test.cc <- md.test.cc %>% select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
+# ddist <- datadist(md.test.cc); options(datadist='ddist') 
+# 
+# # Predict outcomes for each model
+# md.test.cc$pred.m1.3 <- predict(m1.3,md.test.cc)
+# md.test.cc$pred.m1.5 <- predict(m1.5,md.test.cc)
+# md.test.cc$pred.m1.5.age <- predict(m1.5.age,md.test.cc)
+# 
+# # RMSE for each model
+# md.test.cc %>% summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.3)^2)))
+# md.test.cc %>% summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5)^2)))
+# md.test.cc %>% summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5.age)^2)))
+# 
+# # RMSE for each model by drug
+# md.test.cc %>% group_by(drugclass) %>%
+#   dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.3)^2)))
+# md.test.cc %>% group_by(drugclass) %>%
+#   dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5)^2)))
+# md.test.cc %>% group_by(drugclass) %>%
+#   dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5.age)^2)))
+# 
+# #R2
+# rsq <- function (x, y) cor(x, y) ^ 2
+# rsq(md.test.cc$posthba1cfinal,md.test.cc$pred.m1.3)
+# rsq(md.test.cc$posthba1cfinal,md.test.cc$pred.m1.5)
+# rsq(md.test.cc$posthba1cfinal,md.test.cc$pred.m1.5.age)
+# 
+# #Calibration #Cal in the large = intercept, slope = pred
+# ddist <- datadist(md.test.cc); options(datadist='ddist') 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.test.cc)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.test.cc)
+# 
+# #Calibration by age / hba1c / bmi - not this is problematic as provides calibration at posthba1cfinal==0 
+# #Better to mean centre based on outcome so is calibration at mean outcome HbA1c
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx>69)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx>69)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx>69)
+# 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx<59)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx<59)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx<59)
+# 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx>58&agetx<70)
+# ols(posthba1cfinal~pred.m1.5,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx>58&agetx<70)
+# ols(posthba1cfinal~pred.m1.5.age,x=TRUE,y=TRUE,data=md.test.cc,subset=agetx>58&agetx<70)
+# 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=prehba1c<63)
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=prehba1c>62&prehba1c<78)
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=prehba1c>78)
+# 
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=prebmi<30)
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=prebmi>30&prebmi<35)
+# ols(posthba1cfinal~pred.m1.3,x=TRUE,y=TRUE,data=md.test.cc,subset=prebmi>35)
+# 
+# #Mean center - gives calibration at mean observed HbA1c outcome
+# md.test.cc <- md.test.cc %>% mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+#                                     pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+# describe(md.test.cc$posthba1cfinal.m)
+# ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc)
+# 
+# md.test.cc.s <- md.test.cc %>% 
+#   filter(agetx<59) %>%
+#   mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+#          pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+# ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc.s)
+# 
+# md.test.cc.s <- md.test.cc %>% 
+#   filter(agetx>58&agetx<70) %>%
+#   mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+#          pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+# ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc.s)
+# 
+# md.test.cc.s <- md.test.cc %>% 
+#   filter(agetx>69) %>%
+#   mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+#          pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+# ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc.s)
+# 
+# md.test.cc.s <- md.test.cc %>% 
+#   filter(prehba1c<63) %>%
+#   mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+#          pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+# ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc.s)
+# 
+# md.test.cc.s <- md.test.cc %>% 
+#   filter(prehba1c>78) %>%
+#   mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+#          pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+# ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc.s)
+# 
+# 
+# #Plots (not informative!)
+# ggplot(md.test.cc, aes(x = pred.m1.5, y = posthba1cfinal)) +
+#   geom_point() +
+#   stat_smooth(method = "lm", col = "red") +
+#   scale_x_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10))) +
+#   scale_y_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10)))
+# 
+# test <- md.test.cc %>% filter(agetx<59)
+# ggplot(test, aes(x = pred.m1.5, y = posthba1cfinal)) +
+#   geom_point() +
+#   stat_smooth(method = "lm", col = "red") +
+#   scale_x_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10))) +
+#   scale_y_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10)))
+# 
+# #Mean centred (gives same slope)
+# predicted1 <- md.test.cc$pred.m1.5-mean(md.test.cc$pred.m1.5)
+# observed1 <- md.test.cc$posthba1cfinal-mean(md.test.cc$posthba1cfinal)
+# m <- lm(observed1~predicted1)
+# summary(m)
+# 
+# #Hba1c response
+# md.test.cc <- md.test.cc %>%
+#   mutate(
+#     obs.r=posthba1cfinal-prehba1c,
+#     pred.r=pred.m1.5-prehba1c
+# )
+# describe(md.test.cc$obs.r)
+# describe(md.test.cc$pred.r)
+# 
+# ols(posthba1cfinal~pred.m1.5,data=md.test.cc)
+# ols(obs.r~pred.r,data=md.test.cc)
+# ols(obs.r~pred.r,data=md.test.cc,subset=agetx>69)
+# ols(obs.r~pred.r,data=md.test.cc,subset=agetx<59)
+# 
+# ggplot(md.test.cc, aes(x = pred.r, y = obs.r)) +
+#   geom_point() +
+#   geom_smooth(method = "lm", col = "red") +
+#   geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+#                 "dashed")
+# 
+# test <- md.test.cc %>% filter(agetx<59)
+# ggplot(test, aes(x = pred.r, y = obs.r)) +
+#   geom_point() +
+#   stat_smooth(method = "lm", col = "red")  +
+#   geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+#                 "dashed")
+# 
+# 
+# #By tenths of predicted
+# 
+# #Overall
+# md.test.cc <- md.test.cc %>% mutate(hba1c.q = ntile(pred.m1.5, 20))
+# t1 <- md.test.cc %>%
+#   group_by(hba1c.q) %>%
+#   dplyr::summarize(N=length(pred.m1.5),
+#                    hba1c.pred = mean(pred.m1.5),
+#                    hba1c.obs = mean(posthba1cfinal))
+# 
+# ggplot(t1, aes(x = hba1c.pred, y = hba1c.obs)) +
+#   geom_point()  +
+#   geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+#                 "dashed") +
+#   #stat_smooth(method = "lm", col = "red") +
+#   scale_x_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10))) +
+#   scale_y_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10)))
+# 
+# #Age >69
+# md.test.cc.age <- md.test.cc %>%
+#   filter(agetx>69) %>%
+#   mutate(hba1c.q = ntile(pred.m1.5, 20))
+# t1 <- md.test.cc.age %>%
+#   group_by(hba1c.q) %>%
+#   dplyr::summarize(N=length(pred.m1.5),
+#                    hba1c.pred = mean(pred.m1.5),
+#                    hba1c.obs = mean(posthba1cfinal))
+# 
+# ggplot(t1, aes(x = hba1c.pred, y = hba1c.obs)) +
+#   geom_point() +
+#   geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+#                 "dashed") +
+#   #stat_smooth(method = "lm", col = "red") +
+#   scale_x_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10))) +
+#   scale_y_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10)))
+# 
+# #Age <59
+# md.test.cc.age <- md.test.cc %>%
+#   filter(agetx<59) %>%
+#   mutate(hba1c.q = ntile(pred.m1.5, 20))
+# t1 <- md.test.cc.age %>%
+#   group_by(hba1c.q) %>%
+#   dplyr::summarize(N=length(pred.m1.5),
+#                    hba1c.pred = mean(pred.m1.5),
+#                    hba1c.obs = mean(posthba1cfinal))
+# ggplot(t1, aes(x = hba1c.pred, y = hba1c.obs)) +
+#   geom_point() +
+#   geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+#                 "dashed") +
+#   #stat_smooth(method = "lm", col = "red") +
+#   scale_x_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10))) +
+#   scale_y_continuous(limits=c(50,110),breaks=c(seq(50,100,by=10)))
+# 
+# 
+# #Diagnostic plots
+# 
+# #Refit using lm
+# formula1 <- "posthba1cfinal ~ drugclass +
+#   drugline +
+#   ncurrtx +
+#   ethnicity +
+#   imd5 +
+#   smoke +
+#   rcs(hba1cmonth,5)*drugclass +
+#   rcs(agetx,5)*drugclass +
+#   sex*drugclass +
+#   rcs(t2dmduration,5)*drugclass +
+#   rcs(pretotalcholesterol,5)*drugclass +
+#   rcs(prehdl,5)*drugclass +
+#   rcs(prealt,5)*drugclass +
+#   rcs(preegfr,5)*drugclass +
+#   rcs(prebmi,5)*drugclass +
+#   rcs(prehba1c,5)*drugclass"
+# 
+# #Fit model
+# m1.resid <- lm(as.formula(formula1),data=md.train.cc)
+# autoplot(m1.resid, which = 1:6, ncol = 3, label.size = 3)
+# 
+# #Id patient with high leverage
+# 
+# model.diag.metrics <- augment(m1.resid) #From broom package
+# model.diag.metrics %>%
+#   top_n(1, wt = .cooksd) %>% as.data.frame()
+
+# m1.5.copy <- m1.5; class(m1.5.copy) <- "lm"
+# resid <- resid(m1.5.copy)
+# plot(resid, md.train.cc$posthba1cfinal,
+#      ylab="Residuals", xlab="posthba1cfinal") 
+# abline(0, 0)
+
+#Refit using lm log / sqrt = no improvement
+# formula1 <- "sqrt(posthba1cfinal) ~ drugclass +
+#   drugline +
+#   ncurrtx +
+#   ethnicity +
+#   imd5 +
+#   smoke +
+#   rcs(hba1cmonth,5)*drugclass +
+#   rcs(agetx,5)*drugclass +
+#   sex*drugclass +
+#   rcs(t2dmduration,5)*drugclass +
+#   rcs(pretotalcholesterol,5)*drugclass +
+#   rcs(prehdl,5)*drugclass +
+#   rcs(prealt,5)*drugclass +
+#   rcs(preegfr,5)*drugclass +
+#   rcs(prebmi,5)*drugclass +
+#   rcs(prehba1c,5)*drugclass"
+# 
+# #Fit model
+# m1.resid <- lm(as.formula(formula1),data=md.train.cc)
+# autoplot(m1.resid, which = 1:6, ncol = 3, label.size = 3)
+
+
+#Dev
+  nrow(md.train.cc)
+  ddist <- datadist(md.train.cc); options(datadist='ddist') 
+  
+  # Predict outcomes for each model
+  md.train.cc$pred.m1.3 <- predict(m1.3,md.train.cc)
+  md.train.cc$pred.m1.5 <- predict(m1.5,md.train.cc)
+  md.train.cc$pred.m1.5.age <- predict(m1.5.age,md.train.cc)
+
+#Apparent R2
+  rsq <- function (x, y) cor(x, y) ^ 2
+  
+  rsq.train <- rsq(md.train.cc$posthba1cfinal,md.train.cc$pred.m1.5)
+  rsq.train
+  
+  #with CI
+  library(psychometric)
+  r2.ci <- CI.Rsq(rsq.train,n=nrow(md.train.cc),k=(length(coef(m1.5))-1),level=0.95)
+  r2.lcl <- r2.ci$LCL
+  r2.ucl<- r2.ci$UCL
+  
+#Apparent RMSE
+  rmse.train <- md.train.cc %>% dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5)^2)))
+  rmse.train <- as.numeric(rmse.train)
+  
+#Apparent calibration (centred to mean outcome HbA1c), with CI
+  #summary(lm(posthba1cfinal~pred.m1.5,data=md.train.cc))
+
+  md.train.cc <- md.train.cc %>% mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+                                      pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+  describe(md.train.cc$posthba1cfinal.m)
+  mcal <- ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.train.cc)
+  mcal
+  int.train <- mcal$coefficients[1]
+  cal.train <- mcal$coefficients[2]
+  mcal.ci <- confint(ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.train.cc))
+  int.train.lci <- mcal.ci[1]
+  int.train.uci <- mcal.ci[1,2]
+  cal.train.lci <- mcal.ci[2]
+  cal.train.uci <- mcal.ci[2,2]  
+  
+#Bootstrapped CIs for R2, RMSE, Calibration
+#https://discourse.datamethods.org/t/confidence-intervals-for-bootstrap-validated-bias-corrected-performance-estimates/1990/9
+  B <- 1; reps <- 1000; R2 <- numeric(reps); MSE <- numeric(reps); Intercept <- numeric(reps); Slope <- numeric(reps)
+  n <- nrow(md.train.cc)
+  for(i in 1 : reps) {
+     #g <- update(m1.5, subset=sample(1 : n, n, replace=TRUE))
+     v <- validate(m1.5, B=B)
+     R2[i] <- v['R-square', 'index.corrected']
+     MSE[i] <- v['MSE', 'index.corrected']
+     Intercept[i] <- v['Intercept', 'index.corrected']
+     Slope[i] <- v['Slope', 'index.corrected']
+  }
+  
+  #Not used (used model CIs instead)
+  # quantile(R2, c(.025, .975))
+  # quantile(MSE, c(.025, .975))
+  # quantile(Intercept, c(.025, .975))
+  # quantile(Slope, c(.025, .975))
+  
+  #Optimism - following https://www.bmj.com/content/366/bmj.l4293
+  R2.opt <- rsq.train-R2 ; mean(R2.opt)
+  RMSE <- sqrt(MSE)
+  RMSE.opt <- rmse.train-RMSE ; mean(RMSE.opt)
+  Slope.opt <- cal.train-Slope ; mean(Slope.opt)
+  Intercept.opt <- int.train-Intercept ; mean(Intercept.opt)
+ 
+  #Optimism corrected (subtract mean optimism from apparent)
+  
+  #R2
+  oc.r2 <- rsq.train-mean(R2.opt)
+  oc.r2.lci <- r2.lcl-mean(R2.opt)
+  oc.r2.uci <- r2.ucl-mean(R2.opt)
+  
+  #RMSE
+  rmse.train-mean(RMSE.opt)
+  
+  #Slope
+  oc.Slope <- cal.train-mean(Slope.opt)
+  oc.Slope.lci <- cal.train.lci-mean(Slope.opt)
+  oc.Slope.uci <- cal.train.uci-mean(Slope.opt)
+  
+  #Slope
+  oc.Intercept <- int.train-mean(Intercept.opt)
+  oc.Intercept.lci <- int.train.lci-mean(Intercept.opt)
+  oc.Intercept.uci <- int.train.uci-mean(Intercept.opt)
+
+#Optimism adjusted (sense check of above)
+  #set.seed(432002); validate(m1.5, method = "boot", B = 100)
+
+#Calibration plot with loess smoother
+  min.x <- min(round(md.train.cc$pred.m1.5,-1))
+  min.y <- min(round(md.train.cc$posthba1cfinal,-1))
+  max.x <- max(round(md.train.cc$pred.m1.5,-1))
+  max.y <- max(round(md.train.cc$posthba1cfinal,-1))
+  
+  cal1.train <-
+  ggplot(md.train.cc, aes(x = pred.m1.5, y = posthba1cfinal)) +
+    geom_point(alpha=0.05) + 
+    geom_abline(intercept = 0, slope = 1, color = viridis(1, begin = 1), linewidth=1) +
+    geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+                  "dashed", linewidth=2) +
+    scale_x_continuous(limits=c(min.x,max.x),breaks=c(seq(min.x,max.x,by=10))) +
+    scale_y_continuous(limits=c(min.y,max.y),breaks=c(seq(min.y,max.y,by=10))) + 
+    theme_bw() + theme_base() +
+    ylab("Observed HbA1c (mmol/mol)") + 
+    xlab("Predicted HbA1c (mmol/mol)") +
+    ggtitle("Development set (n=100,107)")
+
+
+#Calibration mean observed v mean predicted
+#Overall
+  md.train.cc <- md.train.cc %>% mutate(hba1c.q = ntile(pred.m1.5, 10))
+  t1 <- md.train.cc %>%
+    group_by(hba1c.q) %>%
+    dplyr::summarize(N=length(pred.m1.5),
+                     hba1c.pred = mean(pred.m1.5),
+                     hba1c.obs = mean(posthba1cfinal))
+  
+  cal2.train <-
+  ggplot(t1, aes(x = hba1c.pred, y = hba1c.obs)) +
+    geom_abline(intercept = 0, slope = 1, color = "black", linewidth=1,linetype ="dashed") +
+    geom_smooth(span   = 1,    color = viridis(0.2, begin = 1), se = FALSE, linetype =
+                  "dashed", linewidth=2) +
+    geom_point(color = viridis(1, begin = 0.6),size=5)  +
+    #stat_smooth(method = "lm", col = "red") +
+    scale_x_continuous(limits=c(50,81),breaks=c(seq(50,80,by=10))) +
+    scale_y_continuous(limits=c(50,81),breaks=c(seq(50,80,by=10)))+ 
+    theme_bw() + theme_base() +
+    ylab("Observed HbA1c (mmol/mol)") + 
+    xlab("Predicted HbA1c (mmol/mol)")
+
+#Validation #
+
+  #By geog
+  md.test <- md.test.2004.g; drugline2=0; cohort <- "geog" 
+  
+  # cohort prep
+  md.test <- md.test  %>% mutate(drugclass=factor(drugclass,
+                                                    levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+  md.test.cc <- md.test %>% filter(complete.cases(pretotalcholesterol,
+                                                    prehdl,
+                                                    prealt,
+                                                    preegfr,
+                                                    prebmi))
+  # number of patients
+  nrow(md.test.cc)
+  
+  md.test.cc <- md.test.cc %>% dplyr::select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
+  ddist <- datadist(md.test.cc); options(datadist='ddist') 
+  
+  # Predict outcomes for each model
+  md.test.cc$pred.m1.3 <- predict(m1.3,md.test.cc)
+  md.test.cc$pred.m1.5 <- predict(m1.5,md.test.cc)
+  md.test.cc$pred.m1.5.age <- predict(m1.5.age,md.test.cc)
+
+# R2
+  rsq.test <- rsq(md.test.cc$posthba1cfinal,md.test.cc$pred.m1.5)
+  rsq.test
+  
+  #with CI
+  library(psychometric)
+  r2.ci <- CI.Rsq(rsq.test,n=nrow(md.test.cc),k=(length(coef(m1.5))-1),level=0.95)
+  r2.lcl <- r2.ci$LCL
+  r2.ucl<- r2.ci$UCL
+
+#RMSE
+  rmse.test <- md.test.cc %>% dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5)^2)))
+  rmse.test <- as.numeric(rmse.test)
+
+#Calibration
+  md.test.cc <- md.test.cc %>% mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+                                      pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+  describe(md.test.cc$posthba1cfinal.m)
+  mcal <- ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc)
+  mcal
+  int.test <- mcal$coefficients[1]
+  cal.test <- mcal$coefficients[2]
+  mcal.ci <- confint(ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc))
+  int.test.lci <- mcal.ci[1]
+  int.test.uci <- mcal.ci[1,2]
+  cal.test.lci <- mcal.ci[2]
+  cal.test.uci <- mcal.ci[2,2]  
+
+#Calibration plot with loess smoother
+  min.x <- min(round(md.train.cc$pred.m1.5,-1))
+  min.y <- min(round(md.train.cc$posthba1cfinal,-1))
+  max.x <- max(round(md.train.cc$pred.m1.5,-1))
+  max.y <- max(round(md.train.cc$posthba1cfinal,-1))
+  cal1.test.geog <-
+  ggplot(md.test.cc, aes(x = pred.m1.5, y = posthba1cfinal)) +
+    geom_point(alpha=0.05) + 
+    geom_abline(intercept = 0, slope = 1, color = viridis(1, begin = 1), linewidth=1) +
+    geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+                  "dashed", linewidth=2) +
+    scale_x_continuous(limits=c(min.x,max.x),breaks=c(seq(min.x,max.x,by=10))) +
+    scale_y_continuous(limits=c(min.y,max.y),breaks=c(seq(min.y,max.y,by=10))) + 
+    theme_bw() + theme_base() +
+    ylab("Observed HbA1c (mmol/mol)") + 
+    xlab("Predicted HbA1c (mmol/mol)") +
+    ggtitle("Validation set 1:  Geographical region (n=85,395)")
+
+#Calibration mean observed v mean predicted
+#Overall
+  md.test.cc <- md.test.cc %>% mutate(hba1c.q = ntile(pred.m1.5, 10))
+  t1 <- md.test.cc %>%
+    group_by(hba1c.q) %>%
+    dplyr::summarize(N=length(pred.m1.5),
+                     hba1c.pred = mean(pred.m1.5),
+                     hba1c.obs = mean(posthba1cfinal))
+  
+  cal2.test.geog <-
+  ggplot(t1, aes(x = hba1c.pred, y = hba1c.obs)) +
+    geom_abline(intercept = 0, slope = 1, color = "black", linewidth=1,linetype ="dashed") +
+    geom_smooth(span   = 1,    color = viridis(0.2, begin = 1), se = FALSE, linetype =
+                  "dashed", linewidth=2) +
+    geom_point(color = viridis(1, begin = 0.6),size=5)  +
+    #stat_smooth(method = "lm", col = "red") +
+    scale_x_continuous(limits=c(50,81),breaks=c(seq(50,80,by=10))) +
+    scale_y_continuous(limits=c(50,81),breaks=c(seq(50,80,by=10)))+ 
+    theme_bw() + theme_base() +
+    ylab("Observed HbA1c (mmol/mol)") + 
+    xlab("Predicted HbA1c (mmol/mol)")
+
+
+#By cal
+  
+  md.test <- md.test.2004.yr; drugline2=0; cohort <- "cal" 
+  
+  # cohort prep
+  md.test <- md.test  %>% mutate(drugclass=factor(drugclass,
+                                                    levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+  md.test.cc <- md.test %>% filter(complete.cases(pretotalcholesterol,
+                                                    prehdl,
+                                                    prealt,
+                                                    preegfr,
+                                                    prebmi))
+  # number of patients
+  nrow(md.test.cc)
+  
+  md.test.cc <- md.test.cc %>% dplyr::select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
+  ddist <- datadist(md.test.cc); options(datadist='ddist') 
+  
+  # Predict outcomes for each model
+  md.test.cc$pred.m1.3 <- predict(m1.3,md.test.cc)
+  md.test.cc$pred.m1.5 <- predict(m1.5,md.test.cc)
+  md.test.cc$pred.m1.5.age <- predict(m1.5.age,md.test.cc)
+
+  # R2
+  rsq.test <- rsq(md.test.cc$posthba1cfinal,md.test.cc$pred.m1.5)
+  rsq.test
+  
+  #with CI
+  library(psychometric)
+  r2.ci <- CI.Rsq(rsq.test,n=nrow(md.test.cc),k=(length(coef(m1.5))-1),level=0.95)
+  r2.lcl <- r2.ci$LCL
+  r2.ucl<- r2.ci$UCL
+
+#RMSE
+  rmse.test <- md.test.cc %>% dplyr::summarise(RMSE = sqrt(mean((posthba1cfinal - pred.m1.5)^2)))
+  rmse.test <- as.numeric(rmse.test)
+
+#Calibration
+  md.test.cc <- md.test.cc %>% mutate(posthba1cfinal.m=posthba1cfinal-mean(posthba1cfinal),
+                                      pred.m1.5.m=pred.m1.5-mean(posthba1cfinal))
+  describe(md.test.cc$posthba1cfinal.m)
+  mcal <- ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc)
+  mcal
+  int.test <- mcal$coefficients[1]
+  cal.test <- mcal$coefficients[2]
+  mcal.ci <- confint(ols(posthba1cfinal.m~pred.m1.5.m,x=TRUE,y=TRUE,data=md.test.cc))
+  int.test.lci <- mcal.ci[1]
+  int.test.uci <- mcal.ci[1,2]
+  cal.test.lci <- mcal.ci[2]
+  cal.test.uci <- mcal.ci[2,2]  
+
+#Calibration plot with loess smoother
+  min.x <- min(round(md.train.cc$pred.m1.5,-1))
+  min.y <- min(round(md.train.cc$posthba1cfinal,-1))
+  max.x <- max(round(md.train.cc$pred.m1.5,-1))
+  max.y <- max(round(md.train.cc$posthba1cfinal,-1))
+  cal1.test.cal <-
+  ggplot(md.test.cc, aes(x = pred.m1.5, y = posthba1cfinal)) +
+    geom_point(alpha=0.05) + 
+    geom_abline(intercept = 0, slope = 1, color = viridis(1, begin = 1), linewidth=1) +
+    geom_smooth(span   = 1,    color = viridis(1, begin = 0.6), se = FALSE, linetype =
+                  "dashed", linewidth=2) +
+    scale_x_continuous(limits=c(min.x,max.x),breaks=c(seq(min.x,max.x,by=10))) +
+    scale_y_continuous(limits=c(min.y,max.y),breaks=c(seq(min.y,max.y,by=10))) + 
+    theme_bw() + theme_base() +
+    ylab("Observed HbA1c (mmol/mol)") + 
+    xlab("Predicted HbA1c (mmol/mol)") +
+    ggtitle("Validation set 2: Calendar year (n=26,664)")
+
+#Calibration mean observed v mean predicted
+#Overall
+  md.test.cc <- md.test.cc %>% mutate(hba1c.q = ntile(pred.m1.5, 10))
+  t1 <- md.test.cc %>%
+    group_by(hba1c.q) %>%
+    dplyr::summarize(N=length(pred.m1.5),
+                     hba1c.pred = mean(pred.m1.5),
+                     hba1c.obs = mean(posthba1cfinal))
+  
+  cal2.test.cal <-
+  ggplot(t1, aes(x = hba1c.pred, y = hba1c.obs)) +
+    geom_abline(intercept = 0, slope = 1, color = "black", linewidth=1,linetype ="dashed") +
+    geom_smooth(span   = 1,    color = viridis(0.2, begin = 1), se = FALSE, linetype =
+                  "dashed", linewidth=2) +
+    geom_point(color = viridis(1, begin = 0.6),size=5)  +
+    #stat_smooth(method = "lm", col = "red") +
+    scale_x_continuous(limits=c(50,81),breaks=c(seq(50,80,by=10))) +
+    scale_y_continuous(limits=c(50,81),breaks=c(seq(50,80,by=10)))+ 
+    theme_bw() + theme_base() +
+    ylab("Observed HbA1c (mmol/mol)") + 
+    xlab("Predicted HbA1c (mmol/mol)")
+
+#Combined plot
+  cal.plot.final <- (cal1.train | cal1.test.geog | cal1.test.cal) / (cal2.train | cal2.test.geog | cal2.test.cal ) 
+  grDevices::cairo_pdf(paste0(output_dir,"_calibrationforoutcomeHbA1c.pdf"),width=24,height=16)
+  cal.plot.final  
+  dev.off()
+  
+  png(paste0(output_dir,"_calibrationforoutcomeHbA1c.png"),width=3750,height=2500,res=pngres,restoreConsole=TRUE)
+  cal.plot.final  
+  dev.off()
+```  
+  
+## Separate M + F models
+ 
+```{r}
+#| label: Plot drug * features interaction outputs for all continuous features separate M + F models
+#Reload training data
+md.train.cc <- md.train.cc.backup; cohort <- "dev"
+
+hte.plot.comb.sex <- function(data) {
+  
+q.l <- 0.05
+q.u <- 0.95
+
+#quantile(md.train.cc$prehba1c, c(.01, .99), na.rm=TRUE)
+#c0 <- quantile(md.train.cc$prehba1c, .00, na.rm=TRUE)
+c.l <- 53
+#c99 <- quantile(md.train.cc$prehba1c, .95, na.rm=TRUE)
+c.u <- 110
+
+w <- Predict(m1, drugclass=levels(data$drugclass),
+             prehba1c=seq(c.l,c.u,by=1),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n)
+w <- data.frame(w) %>% mutate(
+  yhat = yhat - prehba1c,
+  upper = upper - prehba1c,
+  lower = lower - prehba1c,
+  var=prehba1c
+)
+
+hte.plot.cont(w,"Baseline HbA1c (mmol/mol)")
+plot.hba1c <- hte.plot.cont(w,"Baseline HbA1c (mmol/mol)")
+
+#BMI
+
+#quantile(data$prebmi, c(.01, .99), na.rm=TRUE)
+c.l <- quantile(data$prebmi, q.l, na.rm=TRUE)
+c.u <- quantile(data$prebmi, q.u, na.rm=TRUE)
+
+w <- Predict(m1, 
+             drugclass=levels(data$drugclass),
+             prebmi=seq(c.l,c.u,by=1),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n) 
+w <-  
+  data.frame(w) %>% 
+  mutate(
+    yhat = yhat - prehba1c,
+    upper = upper - prehba1c,
+    lower = lower - prehba1c,
+    var=prebmi
+    )
+
+hte.plot.cont(w,"BMI")
+plot.bmi <- hte.plot.cont(w,"BMI")
+
+#eGFR
+
+quantile(data$preegfr, c(.01, .99), na.rm=TRUE)
+c.l <- quantile(data$preegfr, q.l, na.rm=TRUE)
+c.u <- quantile(data$preegfr, q.u, na.rm=TRUE)
+
+w <- Predict(m1, 
+             drugclass=levels(data$drugclass),
+             preegfr=seq(c.l,c.u,by=1),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n)
+w <-
+  data.frame(w) %>% 
+  mutate(
+    yhat = yhat - prehba1c,
+    upper = upper - prehba1c,
+    lower = lower - prehba1c,
+    var=preegfr
+  )
+
+hte.plot.cont(w,"eGFR")
+plot.egfr <- hte.plot.cont(w,"eGFR")
+
+#Age tx
+
+quantile(data$agetx, c(.01, .99), na.rm=TRUE)
+c.l <- quantile(data$agetx, q.l, na.rm=TRUE)
+c.u <- quantile(data$agetx, q.u, na.rm=TRUE)
+
+w <- Predict(m1, 
+             drugclass=levels(data$drugclass),
+             agetx=seq(c.l,c.u,by=1),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n)
+w <-
+  data.frame(w) %>% 
+  mutate(
+    yhat = yhat - prehba1c,
+    upper = upper - prehba1c,
+    lower = lower - prehba1c,
+    var=agetx
+  )
+
+hte.plot.cont(w,"Current age")
+plot.age <- hte.plot.cont(w,"Current age")
+
+#T2DM duration
+
+quantile(data$t2dmduration, c(.01, .99), na.rm=TRUE)
+c.l <- quantile(data$t2dmduration, q.l, na.rm=TRUE)
+c.u <- quantile(data$t2dmduration, q.u, na.rm=TRUE)
+
+w <- Predict(m1, 
+             drugclass=levels(data$drugclass),
+             t2dmduration=seq(c.l,c.u,by=1),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n)
+w <-
+  data.frame(w) %>% 
+  mutate(
+    yhat = yhat - prehba1c,
+    upper = upper - prehba1c,
+    lower = lower - prehba1c,
+    var=t2dmduration
+  )
+
+hte.plot.cont(w,"Diabetes duration")
+plot.dur <- hte.plot.cont(w,"Diabetes duration")
+
+#Total chol
+
+quantile(data$pretotalcholesterol, c(.01, .99), na.rm=TRUE)
+c.l <- quantile(data$pretotalcholesterol, q.l, na.rm=TRUE)
+c.u <- quantile(data$pretotalcholesterol, q.u, na.rm=TRUE)
+
+w <- Predict(m1, 
+             drugclass=levels(data$drugclass),
+             pretotalcholesterol=seq(c.l,c.u,by=0.05),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n)
+w <-
+  data.frame(w) %>% 
+  mutate(
+    yhat = yhat - prehba1c,
+    upper = upper - prehba1c,
+    lower = lower - prehba1c,
+    var=pretotalcholesterol
+  )
+
+hte.plot.cont(w,"Total cholesterol")
+plot.tc <- hte.plot.cont(w,"Total cholesterol")
+
+#HDL
+
+#quantile(data$prehdl, c(.01, .99), na.rm=TRUE)
+c.l <- quantile(data$prehdl, q.l, na.rm=TRUE)
+c.u <- quantile(data$prehdl, q.u, na.rm=TRUE)
+
+w <- Predict(m1, 
+             drugclass=levels(data$drugclass),
+             prehdl=seq(c.l,c.u,by=0.05),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n)
+w <-
+  data.frame(w) %>% 
+  mutate(
+    yhat = yhat - prehba1c,
+    upper = upper - prehba1c,
+    lower = lower - prehba1c,
+    var=prehdl
+  )
+
+hte.plot.cont(w,"HDL-c")
+plot.hdl <- hte.plot.cont(w,"HDL-c")
+
+#ALT
+
+#quantile(data$prealt, c(.01, .99), na.rm=TRUE)
+c.l <- quantile(data$prealt, q.l, na.rm=TRUE)
+c.u <- quantile(data$prealt, q.u, na.rm=TRUE)
+
+w <- Predict(m1, 
+             drugclass=levels(data$drugclass),
+             prealt=seq(c.l,c.u,by=1),
+             drugline=drugline.n,
+             ncurrtx=ncurrtx.n, 
+             hba1cmonth=hba1cmonth.n)
+w <-
+  data.frame(w) %>% 
+  mutate(
+    yhat = yhat - prehba1c,
+    upper = upper - prehba1c,
+    lower = lower - prehba1c,
+    var=prealt
+  )
+
+hte.plot.cont(w,"ALT")
+plot.alt <- hte.plot.cont(w,"ALT")
+
+cov.plot <- (plot.hba1c | plot.age | plot.dur | plot.bmi) / (plot.egfr | plot.alt | plot.hdl | plot.tc) +
+  plot_annotation(title="Predicted HbA1c response by drug and clinical features",
+                  theme = theme(plot.title = element_text(size = 12))) + 
+  plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+cov.plot
+return(cov.plot) 
+}
+
+m1 <- m1.5.females
+md.train.cc.f <- md.train.cc %>% filter(sex=="Female")
+ddist <- datadist(md.train.cc.f ); options(datadist='ddist') 
+sex.n <- "Female"; females <- hte.plot.comb.sex(md.train.cc.f)
+
+m1 <- m1.5.males
+md.train.cc.m <- md.train.cc %>% filter(sex=="Male")
+ddist <- datadist(md.train.cc.m ); options(datadist='ddist') 
+sex.n <- "Male"; males <- hte.plot.comb.sex(md.train.cc)
+
+males
+females
+
+grDevices::cairo_pdf(paste0(output_dir,"5drug_drugbyfeature_males_",cohort,"_",model,".pdf"),width=12,height=8)
+males
+dev.off()
+
+png(paste0(output_dir,"5drug_drugbyfeature_males_",cohort,"_",model,".png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
+males
+dev.off()
+
+grDevices::cairo_pdf(paste0(output_dir,"5drug_drugbyfeature_females_",cohort,"_",model,".pdf"),width=12,height=8)
+females
+dev.off()
+
+png(paste0(output_dir,"5drug_drugbyfeature_females_",cohort,"_",model,".png"),width=3000,height=2000,res=pngres,restoreConsole=TRUE)
+females
+dev.off()
+
+############ BEST DRUG #
+# Predict outcomes for each patient on each drug
+md.train.cc.f <- md.train.cc %>% filter(sex=="Female")
+md.train.cc.f <- model.predict(md.train.cc.f,m1.5.females)
+
+md.train.cc.m <- md.train.cc %>% filter(sex=="Male")
+md.train.cc.m <- model.predict(md.train.cc.m,m1.5.males)
+md.train.cc <- rbind(md.train.cc.f,md.train.cc.m)
+
+#Find best drug for each patient
+setDT(md.train.cc)[, lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+md.train.cc[, bestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+
+#Define concordant and discordant
+md.train.cc <- data.frame(md.train.cc)
+md.train.cc <- md.train.cc %>% 
+  mutate(concordant = if_else(drugclass==bestdrug,1,0))
+
+table(md.train.cc$concordant)
+
+#Find the drug with the second lowest HbA1c
+dummy <- md.train.cc %>%
+  mutate(DPP4=ifelse(DPP4==lowest.hba1c,999999,DPP4),
+         SGLT2=ifelse(SGLT2==lowest.hba1c,999999,SGLT2),
+         SU=ifelse(SU==lowest.hba1c,999999,SU),
+         TZD=ifelse(TZD==lowest.hba1c,999999,TZD),
+         GLP1=ifelse(GLP1==lowest.hba1c,999999,GLP1))
+
+setDT(dummy)[, second.lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+dummy[, secondbestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+dummy <- data.frame(dummy) %>% dplyr::select(second.lowest.hba1c,secondbestdrug)
+md.train.cc <- cbind(md.train.cc,dummy)
+
+#Work out the difference in HbA1c between best and second best drug
+md.train.cc <- md.train.cc %>% mutate(best.margin = lowest.hba1c - second.lowest.hba1c)
+describe(md.train.cc$best.margin)
+ 
+#Overall best drug %s
+overall.best.drug <- stackplot.comb(md.train.cc)
+overall.best.drug
+
+grDevices::cairo_pdf(paste0(output_dir,"5drugproportions_sex_",cohort,"_",model,".pdf"),width=28,height=9)
+overall.best.drug
+dev.off()
+
+png(paste0(output_dir,"5drugproportions_sex_",cohort,"_",model,".png"),width=pngwidth,height=1000,res=pngres,restoreConsole=TRUE)
+overall.best.drug
+dev.off()
+
+#Best drug by >3 mmol/mol, which is it? And how does it vary by subgroup
+
+#drugline
+md.train.bd <- md.train.cc %>% 
+  mutate(best.margin.3 = ifelse(best.margin <= -3, 1,0)) %>%
+  filter(best.margin.3 ==1) 
+
+nrow(md.train.bd)
+nrow(md.train.bd)/nrow(md.train.cc)
+
+best.drug3 <- stackplot.comb(md.train.bd)
+best.drug3
+
+grDevices::cairo_pdf(paste0(output_dir,"5drugproportions_bestdrug3_sex_",cohort,"_",model,".pdf"),width=28,height=9)
+best.drug3 
+dev.off()
+  
+png(paste0(output_dir,"5drugproportions_bestdrug3_sex_",cohort,"_",model,".png"),width=pngwidth,height=1000,res=pngres,restoreConsole=TRUE)
+best.drug3
+dev.off()
+
+########### Validation
+
+#| label: Geographical validation
+
 #Validation formula drug pair
     formula2 <- "posthba1cfinal ~ drugclass +
+    drugline +
     ncurrtx +
     ethnicity +
     imd5 +
     smoke +
-    rcs(hba1cmonth,3) +
-    rcs(agetx,3) +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
     sex +
-    rcs(t2dmduration,3) +
-    rcs(pretotalcholesterol,3) +
-    rcs(prehdl,3) +
-    rcs(prealt,3) +
-    rcs(preegfr,3) +
-    rcs(prebmi,3) +
-    rcs(prehba1c,3)"
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)"
 
 #Validation formula overall
     formula3 <-
     "posthba1cfinal ~ concordant +
+    drugline +
     ncurrtx +
-    rcs(hba1cmonth,3) +
-    rcs(agetx,3) +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
     sex +
-    rcs(t2dmduration,3) +
-    rcs(pretotalcholesterol,3) +
-    rcs(prehdl,3) +
-    rcs(prealt,3) +
-    rcs(preegfr,3) +
-    rcs(prebmi,3) +
-    rcs(prehba1c,3)"
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)" 
 
-#By geog, second-line
-md.test <- md.test %>% filter(drugline==2)  ; drugline2=1; cohort <- "geog2ndline"
+#Define model
+#m1 <- m1.5; model <- "m1.5"
+
+#Define cohort
+
+#By geog
+md.test <- md.test.2004.g; drugline2=0; cohort <- "geog" 
 
 # cohort prep
 md.test <- md.test  %>% mutate(drugclass=factor(drugclass,
@@ -2305,7 +4914,15 @@ md.test.cc <- md.test %>% filter(complete.cases(pretotalcholesterol,
 nrow(md.test.cc)
 
 # Predict outcomes on each drug
-md.test.cc <- model.predict(md.test.cc,m1)
+md.test.cc.f <- md.test.cc %>% filter(sex=="Female")
+md.test.cc.f <- model.predict(md.test.cc.f,m1.5.females)
+
+md.test.cc.m <- md.test.cc %>% filter(sex=="Male")
+md.test.cc.m <- model.predict(md.test.cc.m,m1.5.males)
+
+md.test.cc <- rbind(md.test.cc.f,md.test.cc.m)
+md.test.cc$multi_drug_start <- NULL; md.test.cc$INS.c <- NULL; md.test.cc$timeprevcombo_less61 <- NULL; md.test.cc$hb_extreme_53 <- NULL
+ddist <- datadist(md.test.cc); options(datadist='ddist') 
 
 # Overall calibration by mean predictions of other drugs (not optimal but probably conservative)
 
@@ -2329,6 +4946,7 @@ md.test.cc %>% group_by(concordant) %>%
 
 #Minimally adjusted
 m.cd <- lm(posthba1cfinal ~ concordant +
+             drugline +
              ncurrtx + 
              prehba1c,data=md.test.cc)
 summary(m.cd) 
@@ -2352,67 +4970,68 @@ c1 <- md.test.cc %>%
          TZD=ifelse(TZD==lowest.hba1c,NA,TZD),
          GLP1=ifelse(GLP1==lowest.hba1c,NA,GLP1))
 
-c1 <- c1 %>% mutate(mean.others = rowMeans(select(.,DPP4:GLP1),na.rm=T),
+c1 <- c1 %>% mutate(mean.others = rowMeans(dplyr::select(.,DPP4:GLP1),na.rm=T),
                     hba1c_diff = lowest.hba1c-mean.others,
                     hba1c_diff.q = ntile(hba1c_diff, 10))
 
-#define dataset with predicted values
-t1 <- c1 %>% 
-  group_by(hba1c_diff.q) %>%
-  dplyr::summarize(N=length(hba1c_diff),
-                   hba1c_diff.pred = mean(-hba1c_diff))
+# #define dataset with predicted values
+# t1 <- c1 %>% 
+#   group_by(hba1c_diff.q) %>%
+#   dplyr::summarize(N=length(hba1c_diff),
+#                    hba1c_diff.pred = mean(-hba1c_diff))
+# 
+# #obs vs pred, by decile of predicted treatment difference
+# #For Formula 1-3
+# mnumber = c(1:10)
+# models  <- as.list(1:10)
+# 
+# hba1c_diff.obs.adj <- vector()
+# lower.adj <- vector()
+# upper.adj <- vector() 
+# 
+# #Full
+# for(i in mnumber) {
+#   models[[i]] <- lm(as.formula(formula3),data=c1,subset=hba1c_diff.q==i)
+#   hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+#   confint_all <- confint(models[[i]], levels=0.95)
+#   lower.adj <- append(lower.adj,confint_all[2,1])
+#   upper.adj <- append(upper.adj,confint_all[2,2])
+# }
+# 
+# #Final data.frame  
+# t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+# plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+# 
+# ymin  <- 0;  ymax <- 13
+# 
+# cal.overall <- 
+# ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+#   geom_point(alpha=1) + theme_bw() +
+#   geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+#   ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+#   scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+#   scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+#   # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+#   geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+#   geom_label(aes(x = 1, y = 13, label = paste0("Overall observed benefit ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mmol/mol")), 
+#                hjust = 0, 
+#                vjust = 0.5, 
+#                colour = "#555555", 
+#                fill = "white", 
+#                label.size = NA, 
+#                family="Helvetica", 
+#                size = 6)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".pdf"),width=8,height=8)
+# cal.overall  
+# dev.off()
+# 
+# png(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+# cal.overall  
+# dev.off()
 
-#obs vs pred, by decile of predicted treatment difference
-#For Formula 1-3
-mnumber = c(1:10)
-models  <- as.list(1:10)
-
-hba1c_diff.obs.adj <- vector()
-lower.adj <- vector()
-upper.adj <- vector() 
-
-#Full
-for(i in mnumber) {
-  models[[i]] <- lm(as.formula(formula3),data=c1,subset=hba1c_diff.q==i)
-  hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
-  confint_all <- confint(models[[i]], levels=0.95)
-  lower.adj <- append(lower.adj,confint_all[2,1])
-  upper.adj <- append(upper.adj,confint_all[2,2])
-}
-
-#Final data.frame  
-t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
-plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
-
-ymin  <- 0;  ymax <- 13
-
-cal.overall <- 
-ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
-  geom_point(alpha=1) + theme_bw() +
-  geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
-  ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
-  scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
-  scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
-  # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
-  # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
-  theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
-  geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
-  geom_label(aes(x = 1, y = 13, label = paste0("Overall observed benefit ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mmol/mol")), 
-               hjust = 0, 
-               vjust = 0.5, 
-               colour = "#555555", 
-               fill = "white", 
-               label.size = NA, 
-               family="Helvetica", 
-               size = 6)
-
-grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".pdf"),width=8,height=8)
-cal.overall  
-dev.off()
-
-png(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
-cal.overall  
-dev.off()
 
 # matching validation
   
@@ -2428,12 +5047,12 @@ dplyr::summarise(min=min(prehba1c),
 
 set.seed(19840503)  
 match <- matchit(concordant~
+                 drugline + 
                  ncurrtx + 
                  ethnicity +
                  imd5 +
                  smoke +
                  agetx +
-                 sex +
                  t2dmduration +
                  pretotalcholesterol +
                  prehdl +
@@ -2442,8 +5061,11 @@ match <- matchit(concordant~
                  prebmi +
                  prehba1c, 
                data = c1,  
-               exact = ~ bestdrug + prehba1c.g, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
-               method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #, caliper=0.01
+               exact = ~ bestdrug + prehba1c.g + sex, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
+               method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #
+               #method = "nearest",distance="glm",ratio=4, replace=TRUE, mahvars = c("prehba1c","drugline","ncurrtx"),caliper=0.01) #, 
+# + sex
+#Match on best drug
 
 matched <- match.data(match)
 summary(match)
@@ -2464,14 +5086,14 @@ table(match.t$concordant)
 #Get concordant subset and predicted values for each drug
 match.c <- get_matches(match) %>%
 filter(concordant==1) %>%
-select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid) %>%
+dplyr::select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid, agetx=agetx) %>%
 mutate(subclass=as.numeric(subclass))
 
 #Get discordant subset
 match.d <- get_matches(match) %>%
 filter(concordant==0) %>%
 #filter(drugclass!="DPP4") %>%
-select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
+dplyr::select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
 mutate(subclass=as.numeric(subclass))
 
 #Merge
@@ -2557,41 +5179,871 @@ cal.match <-
 ggplot(data=match.res,aes(x=-pred,y=-mean)) +
 geom_point(alpha=1) + theme_bw() +
 geom_errorbar(aes(ymin=-upper.ci, ymax=-lower.ci), colour="black", width=.1) +
-ylab("Observed HbA1c benefit (mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
-scale_x_continuous(limits=c(0,12),breaks=seq(0,12,by=2)) +
-scale_y_continuous(limits=c(0,12),breaks=seq(0,12,by=2)) +
+ylab("Average HbA1c benefit (Unadjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+scale_x_continuous(limits=c(0,15),breaks=seq(0,15,by=2)) +
+scale_y_continuous(limits=c(0,15),breaks=seq(0,15,by=2)) +
+coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+panel_border(remove=T) +
 # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
 # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
 theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
 geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
-geom_label(aes(x = 0.5, y = 11, label = paste0("Observed benefit ", round(-pred.overall,1)," (95%CI ",round(-pred.uci,1),"-",round(-pred.lci,1),") mmol/mol \n",
-                                             "(n=",nrow(match.c)," model-concordant, n=",nrow(match.d)," matched-discordant)")),
+geom_label(aes(x = 0.5, y = 14, label = paste0("Average benefit [unadjusted] ", round(-pred.overall,1)," (95%CI ",round(-pred.uci,1),"-",round(-pred.lci,1),") mmol/mol \n",
+                                             "(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")),
            hjust = 0, 
            vjust = 0.5, 
            colour = "#555555", 
            fill = "white", 
            label.size = NA, 
            family="Helvetica", 
-           size = 6)
+           size = 4.5)
 
-grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".pdf"),width=8,height=8)
+grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_sex_",cohort,"_",model,".pdf"),width=8,height=8)
 cal.match
 dev.off()
 
-png(paste0(output_dir,"5drugcalibration_cprdval_matched_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+png(paste0(output_dir,"5drugcalibration_cprdval_matched_sex_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
 cal.match
 dev.off()
 
+#Double robust adjustment
+    match.indv.c <- match.indv %>% select(subclass,patid.c,pred.benefit.q)
+    match.indv.d <- match.indv %>% select(subclass,patid.d,pred.benefit.q)
+    
+    match.c <- get_matches(match) %>%
+    filter(concordant==1) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.c=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.c <- merge(match.c,match.indv.c,by=c("subclass","patid.c"))  %>% dplyr::select(-patid.c)            
+                  
+    match.d <- get_matches(match) %>%
+    filter(concordant==0) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.d=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.d <- merge(match.d,match.indv.d,by=c("subclass","patid.d")) %>% dplyr::select(-patid.d)               
+    
+    match.final <- rbind(match.c,match.d)
+    
+    #Adjusted
+    m.cd <- lm(as.formula(formula3),data= match.final)
+    summary(m.cd)
+    confint(m.cd)
+    
+    est <- m.cd$coefficients[2]
+    ci.l <- confint(m.cd)[2]
+    ci.u <- confint(m.cd)[2,2]
+
+    #obs vs pred, by decile of predicted benefit
+    #For Formula 1-3
+    mnumber = c(1:10)
+    models  <- as.list(1:10)
+    
+    hba1c_diff.obs.adj <- vector()
+    lower.adj <- vector()
+    upper.adj <- vector() 
+    
+    #Full
+    for(i in mnumber) {
+      models[[i]] <- lm(as.formula(formula3),data=match.final,subset=pred.benefit.q==i)
+      hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+      confint_all <- confint(models[[i]], levels=0.95)
+      lower.adj <- append(lower.adj,confint_all[2,1])
+      upper.adj <- append(upper.adj,confint_all[2,2])
+    }
+    
+    #define dataset with predicted values
+    t1 <- match.indv %>% 
+      group_by(pred.benefit.q) %>%
+      dplyr::summarize(N=length(pred.benefit),
+                       hba1c_diff.pred = mean(-pred.benefit))
+    
+    #Final data.frame  
+    t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+    plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+    
+    ymin  <- 0;  ymax <- 15
+    
+    cal.match.adj <- 
+    ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+      geom_point(alpha=1) + theme_bw() +
+      geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+      ylab("Average HbA1c benefit (Adjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+      scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+      panel_border(remove=T) +
+      # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+      geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+      geom_label(aes(x = 1, y = 14.5, label = paste0("Average benefit [adjusted] ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mol/mol \n","(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")), 
+                   hjust = 0, 
+                   vjust = 0.5, 
+                   colour = "#555555", 
+                   fill = "white", 
+                   label.size = NA, 
+                   family="Helvetica", 
+                   size = 4.5)
+      
+    
+      png(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_sex_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+      cal.match.adj
+      dev.off()
+
+      grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_sex_",cohort,"_",model,".pdf"),width=8,height=8)
+      cal.match.adj
+      dev.off()
+      
+#Matched, by age category
+
+  describe(match.indv$agetx)
+  
+  match.indv <- match.indv %>% 
+    mutate(agecat = cut(agetx,
+                        breaks=c(18,40,50,60,70,80),
+                        labels=c("18-39", "40-49", "50-59", "60-69", "70-79")))
+  match.indv %>% group_by(agecat) %>% dplyr::summarize(min=min(agetx),max=max(agetx),n=n())
+  
+  #Unweighted mean
+  match.indv  %>%
+  group_by(agecat) %>%
+  dplyr::summarise(mean = mean(obs.benefit, na.rm = TRUE),
+                   sd = sd(obs.benefit, na.rm = TRUE),
+                   n = n(),
+                   pred = mean(pred.benefit,na.rm=TRUE))%>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = mean + qt(1 - (0.05 / 2), n - 1) * se)
+  
 # Calibration by drug pair 
 
-# Derive average treatment effect per decile for each drug combination
-val.plot <- validation.comb(md.test.cc)
+# # Derive average treatment effect per decile for each drug combination
+# val.plot <- validation.comb(md.test.cc)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".pdf"),width=24,height=12)
+# val.plot  
+# dev.off()
+#   
+# png(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".png"),width=4000,height=2000,res=pngres,restoreConsole=TRUE)
+# val.plot
+# dev.off()
 
-grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".pdf"),width=24,height=12)
-val.plot
-dev.off()
+#| label: Calendar year validation
+
+#Validation formula drug pair
+    formula2 <- "posthba1cfinal ~ drugclass +
+    drugline +
+    ncurrtx +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
+    sex +
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)"
+
+#Validation formula overall
+    formula3 <-
+    "posthba1cfinal ~ concordant +
+    drugline +
+    ncurrtx +
+    ethnicity +
+    imd5 +
+    smoke +
+    rcs(hba1cmonth,5) +
+    rcs(agetx,5) +
+    sex +
+    rcs(t2dmduration,5) +
+    rcs(pretotalcholesterol,5) +
+    rcs(prehdl,5) +
+    rcs(prealt,5) +
+    rcs(preegfr,5) +
+    rcs(prebmi,5) +
+    rcs(prehba1c,5)" 
+
+#By cal year
+md.test <- md.test.2004.yr; drugline2=0; cohort <- "calyr"
+
+# cohort prep
+md.test <- md.test  %>% mutate(drugclass=factor(drugclass,
+                                                  levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+md.test.cc <- md.test %>% filter(complete.cases(pretotalcholesterol,
+                                                  prehdl,
+                                                  prealt,
+                                                  preegfr,
+                                                  prebmi))
+# number of patients
+nrow(md.test.cc)
+
+# Predict outcomes on each drug
+md.test.cc.f <- md.test.cc %>% filter(sex=="Female")
+md.test.cc.f <- model.predict(md.test.cc.f,m1.5.females)
+
+md.test.cc.m <- md.test.cc %>% filter(sex=="Male")
+md.test.cc.m <- model.predict(md.test.cc.m,m1.5.males)
+
+md.test.cc <- rbind(md.test.cc.f,md.test.cc.m)
+md.test.cc$multi_drug_start <- NULL; md.test.cc$INS.c <- NULL; md.test.cc$timeprevcombo_less61 <- NULL; md.test.cc$hb_extreme_53 <- NULL
+ddist <- datadist(md.test.cc); options(datadist='ddist') 
+
+# Overall calibration by mean predictions of other drugs (not optimal but probably conservative)
+
+#Find best drug
+#https://stackoverflow.com/questions/37195322/create-a-new-variable-from-the-minimum-in-r
+setDT(md.test.cc)[, lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+md.test.cc[, bestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+
+#Define concordant and discordant
+md.test.cc <- data.frame(md.test.cc)
+md.test.cc <- md.test.cc %>% 
+  mutate(concordant = if_else(drugclass==bestdrug,1,0))
+
+table(md.test.cc$concordant)
+
+#Test outcome in concordant v discordant
+
+#Compare baseline HbA1c
+md.test.cc %>% group_by(concordant) %>% 
+  dplyr::summarise(meanhb=mean(prehba1c))
+
+#Minimally adjusted
+m.cd <- lm(posthba1cfinal ~ concordant +
+             drugline +
+             ncurrtx + 
+             prehba1c,data=md.test.cc)
+summary(m.cd) 
+
+
+#Adjusted
+m.cd <- lm(as.formula(formula3),data=md.test.cc)
+summary(m.cd)
+confint(m.cd)
+
+est <- m.cd$coefficients[2]
+ci.l <- confint(m.cd)[2]
+ci.u <- confint(m.cd)[2,2]
+
+#define strata 
+
+c1 <- md.test.cc %>%
+  mutate(DPP4=ifelse(DPP4==lowest.hba1c,NA,DPP4),
+         SGLT2=ifelse(SGLT2==lowest.hba1c,NA,SGLT2),
+         SU=ifelse(SU==lowest.hba1c,NA,SU),
+         TZD=ifelse(TZD==lowest.hba1c,NA,TZD),
+         GLP1=ifelse(GLP1==lowest.hba1c,NA,GLP1))
+
+c1 <- c1 %>% mutate(mean.others = rowMeans(dplyr::select(.,DPP4:GLP1),na.rm=T),
+                    hba1c_diff = lowest.hba1c-mean.others,
+                    hba1c_diff.q = ntile(hba1c_diff, 10))
+
+#define dataset with predicted values
+# t1 <- c1 %>% 
+#   group_by(hba1c_diff.q) %>%
+#   dplyr::summarize(N=length(hba1c_diff),
+#                    hba1c_diff.pred = mean(-hba1c_diff))
+# 
+# #obs vs pred, by decile of predicted treatment difference
+# #For Formula 1-3
+# mnumber = c(1:10)
+# models  <- as.list(1:10)
+# 
+# hba1c_diff.obs.adj <- vector()
+# lower.adj <- vector()
+# upper.adj <- vector() 
+# 
+# #Full
+# for(i in mnumber) {
+#   models[[i]] <- lm(as.formula(formula3),data=c1,subset=hba1c_diff.q==i)
+#   hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+#   confint_all <- confint(models[[i]], levels=0.95)
+#   lower.adj <- append(lower.adj,confint_all[2,1])
+#   upper.adj <- append(upper.adj,confint_all[2,2])
+# }
+# 
+# #Final data.frame  
+# t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+# plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+# 
+# ymin  <- 0;  ymax <- 13
+# 
+# cal.overall <- 
+# ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+#   geom_point(alpha=1) + theme_bw() +
+#   geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+#   ylab("Average HbA1c benefit (Unadjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+#   scale_x_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+#   scale_y_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+#   # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+#   theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+#   geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+#   geom_label(aes(x = 1, y = 13, label = paste0("Overall observed benefit ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mmol/mol")), 
+#                hjust = 0, 
+#                vjust = 0.5, 
+#                colour = "#555555", 
+#                fill = "white", 
+#                label.size = NA, 
+#                family="Helvetica", 
+#                size = 6)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".pdf"),width=8,height=8)
+# cal.overall  
+# dev.off()
+# 
+# png(paste0(output_dir,"5drugcalibration_cprdval_overall_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+# cal.overall  
+# dev.off()
+
+# matching validation
   
-png(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".png"),width=4000,height=2000,res=pngres,restoreConsole=TRUE)
-val.plot 
+#Match concordant and discordant, with exact matching by baseline HbA1c ventile + all other predictors and covariates
+
+#Define baseline HbA1c ventile
+c1 <- md.test.cc %>% 
+  mutate(prehba1c.g=ntile(prehba1c, 20))
+
+c1 %>% 
+group_by(prehba1c.g) %>%
+dplyr::summarise(min=min(prehba1c),
+                 max=max(prehba1c))
+
+set.seed(19840503)  
+match <- matchit(concordant~
+                 drugline + 
+                 ncurrtx + 
+                 ethnicity +
+                 imd5 +
+                 smoke +
+                 agetx +
+                 t2dmduration +
+                 pretotalcholesterol +
+                 prehdl +
+                 prealt +
+                 preegfr +
+                 prebmi +
+                 prehba1c, 
+               data = c1,  
+               exact = ~ bestdrug + prehba1c.g + sex, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
+               method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #, caliper=0.01
+
+matched <- match.data(match)
+summary(match)
+plot(summary(match))
+table(matched$concordant)
+
+m.cd <- lm(posthba1cfinal ~ concordant,data=matched, weights=weights)
+summary(m.cd) 
+
+pred.overall <- m.cd$coefficients[2]
+pred.lci <- confint(m.cd)[2]
+pred.uci <- confint(m.cd)[2,2]
+
+### Prepare paired dataset
+match.t <- get_matches(match)
+table(match.t$concordant)
+
+#Get concordant subset and predicted values for each drug
+match.c <- get_matches(match) %>%
+filter(concordant==1) %>%
+dplyr::select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid) %>%
+mutate(subclass=as.numeric(subclass))
+
+#Get discordant subset
+match.d <- get_matches(match) %>%
+filter(concordant==0) %>%
+#filter(drugclass!="DPP4") %>%
+dplyr::select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
+mutate(subclass=as.numeric(subclass))
+
+#Merge
+match.indv <- merge(match.c,match.d,by="subclass")
+
+#Check for duplicate patids (in theory a patient could match to themselves)
+match.indv <- match.indv %>% mutate(dup=identical(match.indv[['patid.c']],match.indv[['patid.d']]))
+table(match.indv$dup)
+
+#Drop if discordant patient receives same drug as concordant patient
+match.indv <- match.indv %>% 
+filter(drugclass!=disc.drugclass)
+#Cannot happen as match on bestdrug
+
+### Define predicted benefit for each pair
+
+#Define predicted outcome for concordant
+match.indv <- match.indv %>%
+mutate(pred.c=pmin(DPP4,SGLT2,SU,TZD,GLP1)) %>%
+#Define predicted outcome for discordant
+mutate(pred.d=ifelse(disc.drugclass=="DPP4",DPP4,
+                     ifelse(disc.drugclass=="SGLT2",SGLT2,
+                            ifelse(disc.drugclass=="SU",SU,
+                                   ifelse(disc.drugclass=="TZD",TZD,GLP1
+                                   ))))) %>%
+#Define predicted benefit
+mutate(pred.benefit=pred.c-pred.d,
+       pred.benefit.q=ntile(-pred.benefit, 10))
+describe(match.indv$pred.benefit)
+table(match.indv$pred.benefit.q)
+
+### Define observed benefit for each pair
+
+#Define observed benefit
+match.indv <- match.indv %>%
+mutate(obs.benefit=posthba1cfinal-disc.posthba1cfinal)
+
+### Mean + CIs, overall and by benefit decile
+
+#Overall
+describe(match.indv$obs.benefit)
+# match.overall <-  CI(match.indv$obs.benefit, ci=0.95,weights=disc.weights)  
+# match.overall
+match.indv %>% dplyr::summarise(wt.mean=weighted.mean(obs.benefit,disc.weights))
+
+#By decile
+match.res <- match.indv %>% group_by(pred.benefit.q) %>% dplyr::summarise(wt.mean=weighted.mean(obs.benefit,disc.weights),
+                                                                        pred = mean(pred.benefit,na.rm=TRUE))
+match.res
+
+#Weighted mean (CIs not straightforward)
+#Weights are by definition 1 unless using N:1 matching
+match.res <- match.indv %>% group_by(pred.benefit.q) %>% 
+dplyr::summarise(
+  mean= mean(obs.benefit),
+  wt.mean=weighted.mean(obs.benefit,disc.weights),
+  pred = mean(pred.benefit,na.rm=TRUE))
+match.res
+
+#Median (IQR)
+match.res <- match.indv %>% group_by(pred.benefit.q) %>% 
+dplyr::summarise(
+  median.obs= median(obs.benefit),
+  median.pred= median(pred.benefit),
+  lower.ci = quantile(obs.benefit,0.25),
+  upper.ci = quantile(obs.benefit,0.75)
+)
+match.res
+
+#Unweighted mean
+match.res <-
+match.indv  %>%
+group_by(pred.benefit.q) %>%
+dplyr::summarise(mean = mean(obs.benefit, na.rm = TRUE),
+                 sd = sd(obs.benefit, na.rm = TRUE),
+                 n = n(),
+                 pred = mean(pred.benefit,na.rm=TRUE))%>%
+mutate(se = sd / sqrt(n),
+       lower.ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+       upper.ci = mean + qt(1 - (0.05 / 2), n - 1) * se)
+
+cal.match <- 
+ggplot(data=match.res,aes(x=-pred,y=-mean)) +
+geom_point(alpha=1) + theme_bw() +
+geom_errorbar(aes(ymin=-upper.ci, ymax=-lower.ci), colour="black", width=.1) +
+ylab("Average HbA1c benefit (Unadjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+scale_x_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+scale_y_continuous(limits=c(-2,14),breaks=seq(-2,14,by=2)) +
+coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+panel_border(remove=T) +
+# scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+# scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+geom_label(aes(x = 0.5, y = 14, label = paste0("Average benefit [unadjusted] ", round(-pred.overall,1),
+" (95%CI ",round(-pred.uci,1),"-",
+round(-pred.lci,1),") mmol/mol \n", "(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")),
+           hjust = 0, 
+           vjust = 0.5, 
+           colour = "#555555", 
+           fill = "white", 
+           label.size = NA, 
+           family="Helvetica", 
+           size = 4.5)
+
+grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_sex_",cohort,"_",model,".pdf"),width=8,height=8)
+cal.match
 dev.off()
+
+png(paste0(output_dir,"5drugcalibration_cprdval_matched_sex_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+cal.match
+dev.off()
+
+#Double robust adjustment
+    match.indv.c <- match.indv %>% select(subclass,patid.c,pred.benefit.q)
+    match.indv.d <- match.indv %>% select(subclass,patid.d,pred.benefit.q)
+    
+    match.c <- get_matches(match) %>%
+    filter(concordant==1) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.c=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.c <- merge(match.c,match.indv.c,by=c("subclass","patid.c"))  %>% dplyr::select(-patid.c)            
+                  
+    match.d <- get_matches(match) %>%
+    filter(concordant==0) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.d=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c)
+    match.d <- merge(match.d,match.indv.d,by=c("subclass","patid.d")) %>% dplyr::select(-patid.d)               
+    
+    match.final <- rbind(match.c,match.d)
+    
+    #Overall
+    #Adjusted
+    m.cd <- lm(as.formula(formula3),data= match.final)
+    summary(m.cd)
+    confint(m.cd)
+    
+    est <- m.cd$coefficients[2]
+    ci.l <- confint(m.cd)[2]
+    ci.u <- confint(m.cd)[2,2]
+
+    #obs vs pred, by decile of predicted benefit
+    #For Formula 1-3
+    mnumber = c(1:10)
+    models  <- as.list(1:10)
+    
+    hba1c_diff.obs.adj <- vector()
+    lower.adj <- vector()
+    upper.adj <- vector() 
+    
+    #Full
+    for(i in mnumber) {
+      models[[i]] <- lm(as.formula(formula3),data=match.final,subset=pred.benefit.q==i)
+      hba1c_diff.obs.adj <- append(hba1c_diff.obs.adj,models[[i]]$coefficients[2])
+      confint_all <- confint(models[[i]], levels=0.95)
+      lower.adj <- append(lower.adj,confint_all[2,1])
+      upper.adj <- append(upper.adj,confint_all[2,2])
+    }
+    
+    #define dataset with predicted values
+    t1 <- match.indv %>% 
+      group_by(pred.benefit.q) %>%
+      dplyr::summarize(N=length(pred.benefit),
+                       hba1c_diff.pred = mean(-pred.benefit))
+    
+    #Final data.frame  
+    t1 <- data.frame(t1,cbind(hba1c_diff.obs.adj,lower.adj,upper.adj))
+    plotdata <- t1 %>% dplyr::mutate(obs=-hba1c_diff.obs.adj,lci=-lower.adj,uci=-upper.adj)
+    
+    ymin  <- 0;  ymax <- 15
+    
+    cal.match.adj <- 
+    ggplot(data=plotdata,aes(x=hba1c_diff.pred,y=obs)) +
+      geom_point(alpha=1) + theme_bw() +
+      geom_errorbar(aes(ymin=lci, ymax=uci), colour="black", width=.1) +
+      ylab("Average HbA1c benefit (Adjusted; mmol/mol)") + xlab("Predicted HbA1c benefit (mmol/mol)") +
+      scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(ymin,ymax,by=2))) +
+      coord_cartesian(xlim=c(0,15),ylim=c(0,15)) +
+      panel_border(remove=T) +
+      # scale_x_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      # scale_y_continuous(limits=c(ymin,ymax),breaks=c(seq(yminr,ymaxr,by=2))) +
+      theme_base() + geom_abline(intercept=0,slope=1, color="red", lwd=0.75) + ggtitle("") +
+      geom_vline(xintercept=0, linetype="dashed", color = "grey60") + geom_hline(yintercept=0, linetype="dashed", color = "grey60") +
+      geom_label(aes(x = 1, y = 14.5, label = paste0("Average benefit [adjusted] ",round(-est,1)," (95%CI ",round(-ci.u,1),"-",round(-ci.l,1),") mol/mol \n","(n=",nrow(match.c)," matched-concordant, n=",nrow(match.d)," matched-discordant)")), 
+                   hjust = 0, 
+                   vjust = 0.5, 
+                   colour = "#555555", 
+                   fill = "white", 
+                   label.size = NA, 
+                   family="Helvetica", 
+                   size = 4.5)
+
+      png(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_sex_",cohort,"_",model,".png"),width=2000,height=2000,res=pngres,restoreConsole=TRUE)
+      cal.match.adj
+      dev.off()
+
+      grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_matched_adj_sex_",cohort,"_",model,".pdf"),width=8,height=8)
+      cal.match.adj
+      dev.off()
+# Derive average treatment effect per decile for each drug combination
+# val.plot <- validation.comb.notzd(md.test.cc)
+# 
+# grDevices::cairo_pdf(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".pdf"),width=24,height=12)
+# val.plot
+# dev.off()
+#   
+# png(paste0(output_dir,"5drugcalibration_cprdval_",cohort,"_",model,".png"),width=4000,height=2000,res=pngres,restoreConsole=TRUE)
+# val.plot
+# dev.off()
+  
+  
+```  
+
+## Whole population benefit
+
+```{r}
+#| label: Whole population benefit
+
+#Prepare whole cohort
+md.all <- rbind(md.train,md.test.2004.g,md.test.2004.yr)
+
+  md.all <- md.all %>% 
+    mutate(drugclass=factor(drugclass,
+                            levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+
+  #Define complete case set for variables with missing data
+  md.all.cc <- md.all %>% filter(complete.cases(pretotalcholesterol,
+                                                    prehdl,
+                                                    prealt,
+                                                    preegfr,
+                                                    prebmi))
+  
+  #Set data dist for rms package
+  md.all.cc <- md.all.cc %>% dplyr::select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
+  ddist <- datadist(md.all.cc); options(datadist='ddist')
+
+
+#Identify concordant patients
+
+# Predict outcomes for each patient on each drug
+md.all.cc <- model.predict(md.all.cc,m1)
+
+#Find best drug for each patient
+setDT(md.all.cc)[, lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+md.all.cc[, bestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+
+#Define concordant and discordant
+md.all.cc <- data.frame(md.all.cc)
+md.all.cc <- md.all.cc %>% 
+  mutate(concordant = if_else(drugclass==bestdrug,1,0))
+
+table(md.all.cc$concordant)
+
+m1 <- m1.5
+
+#HbA1c
+
+    #Predict hba1c outcome on treatment actually received
+    md.all.cc <- md.all.cc %>% mutate(predbasedontxreceived=predict(m1,md.all.cc))
+
+    #cprd.final <- cprd.final %>% mutate(predbasedonoptimaltx=ifelse(bestdrug=="DPP4",DPP4.pred.lm,SGLT2.pred.lm))
+    #lowest HbA1c already estimated in above step, this  is equivalent to predbasedonoptimaltx
+    
+    md.all.cc <- md.all.cc %>% mutate(predtxdiff = abs(lowest.hba1c-predbasedontxreceived))
+    
+    # Overall benefit of prescribing based on best drug versus current prescribing
+    describe(md.all.cc$predtxdiff) 
+    sd(md.all.cc$predtxdiff) 
+   
+    md.all.cc %>% group_by(concordant) %>%
+      dplyr::summarise(n=n(),
+                       meanbenefit=mean(predtxdiff),
+                       sdbenefit=sd(predtxdiff))
+    
+    # Predicted outcome on treatment received
+    describe(md.all.cc$predbasedontxreceived) 
+    sd(md.all.cc$predbasedontxreceived) 
+    
+    # Predicted outcome on optimal therapy
+    describe(md.all.cc$lowest.hba1c) 
+    sd(md.all.cc$lowest.hba1c) 
+    
+    CI(md.all.cc$posthba1cfinal)
+    CI(md.all.cc$lowest.hba1c)
+    CI(md.all.cc$predbasedontxreceived)
+    CI(md.all.cc$predtxdiff)
+
+    #For initations since 2019
+    md.all.cc <- md.all.cc %>% dplyr::mutate(init2019 = ifelse(dstartdate>as.Date("2018-12-31"),1,0))
+    table(md.all.cc$init2019)
+    table(md.all.cc$concordant,md.all.cc$init2019)
+    
+    md.all.cc.2019 <- md.all.cc %>% filter(init2019==1)
+    CI(md.all.cc.2019$posthba1cfinal)
+    CI(md.all.cc.2019$lowest.hba1c)
+    CI(md.all.cc.2019$predbasedontxreceived)
+    CI(md.all.cc.2019$predtxdiff)
+  
+    #For second-line initations
+    md.all.cc <- md.all.cc %>% dplyr::mutate(secondline = ifelse(drugline==2,1,0))
+    table(md.all.cc$secondline)
+    table(md.all.cc$concordant,md.all.cc$secondline)
+    
+    md.all.cc.sec <- md.all.cc %>% filter(secondline==1)
+    CI(md.all.cc.sec$posthba1cfinal)
+    CI(md.all.cc.sec$lowest.hba1c)
+    CI(md.all.cc.sec$predbasedontxreceived)
+    CI(md.all.cc.sec$predtxdiff)
+  
+    #For since 2019, second-line
+    md.all.cc.sec2019 <- md.all.cc %>% filter(secondline==1 & init2019==1)
+    table(md.all.cc.sec2019$concordant)
+
+    CI(md.all.cc.sec2019$posthba1cfinal)
+    CI(md.all.cc.sec2019$lowest.hba1c)
+    CI(md.all.cc.sec2019$predbasedontxreceived)
+    CI(md.all.cc.sec2019$predtxdiff)
+
+    #Exclude DPP4i
+    md.all.cc.nodpp4 <- md.all.cc %>% filter(drugclass!="DPP4")
+    table(md.all.cc.nodpp4$concordant)
+    
+    CI(md.all.cc.nodpp4$posthba1cfinal)
+    CI(md.all.cc.nodpp4$lowest.hba1c)
+    CI(md.all.cc.nodpp4$predbasedontxreceived)
+    CI(md.all.cc.nodpp4$predtxdiff)
+    
+```
+
+## Whole population model
+```{r}
+#| label: Whole population model
+nrow(md.all.cc)
+
+# Primary model setup (5-knot rcs for all continuous variables for maximum flexibility)
+formula1 <- "posthba1cfinal ~ drugclass +
+  drugline +
+  ncurrtx +
+  ethnicity +
+  imd5 +
+  smoke +
+  rcs(hba1cmonth,5)*drugclass +
+  rcs(agetx,5)*drugclass +
+  sex*drugclass +
+  rcs(t2dmduration,5)*drugclass +
+  rcs(pretotalcholesterol,5)*drugclass +
+  rcs(prehdl,5)*drugclass +
+  rcs(prealt,5)*drugclass +
+  rcs(preegfr,5)*drugclass +
+  rcs(prebmi,5)*drugclass +
+  rcs(prehba1c,5)*drugclass"
+
+#Fit model
+m1 <- ols(as.formula(formula1),data=md.all.cc,x=TRUE,y=TRUE)
+
+#Number of observations and starting patients
+nobs(m1)
+nrow(md.all.cc)
+
+#F-test for global significance of different model components
+anova(m1,indnl=FALSE)
+
+#Plot variables by proportion of R2 for predicting HbA1c outcome directly
+plot(anova(m1), what='proportion R2')
+
+##Apply penalisation to adjust for overfitting (allow different penalties for simple, non-linear and interaction terms)
+
+#Final optimal penalty
+pen<- pentrace(m1,
+               list(simple=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000),
+                    nonlinear=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000),
+                    interaction=10*c(0.05,0.1,0.2,0.3,0.4,0.5,1,5,10,100,1000,10000)))
+
+pen$penalty #optimal penalty
+
+#Update model applying penalty
+m1 <- update(m1, penalty=pen$penalty)
+
+#Effective degrees of freedom of updated model
+effective.df(m1)
+
+#Use saved model (rather then run above which takes a long time)
+#m1 <- m1.5
+
+#Print summary of model object 
+m1
+
+#Plot variables by proportion of R2 for predicting HbA1c outcome directly from penalised model
+plot(anova(m1), what='proportion R2')
+
+#Final model equation
+#Function(m1)
+
+#Save
+m1.5.all <- m1
+save(m1.5.all,file=paste0(output_dir,"fivedrugmodel_5knot_completecohort.Rdata"))
+
+#Compare predictions
+
+#Predict hba1c outcome on treatment actually received m1.5
+md.all.cc <- md.all.cc %>% mutate(predm1.5=predict(m1.5,md.all.cc))
+
+#Predict hba1c outcome on treatment actually received m1.5.all
+md.all.cc <- md.all.cc %>% mutate(predm1.5.all=predict(m1.5.all,md.all.cc))
+
+p.c <- 
+  ggplot(md.all.cc,aes(x = predm1.5, y = predm1.5.all)) +
+  geom_point()+ 
+  geom_smooth(method = "lm") +
+  geom_smooth(method = "loess") 
+     
+summary(lm(predm1.5~predm1.5.all,data=md.all.cc))
+
+grDevices::cairo_pdf(paste0(output_dir,"compare_dev_full_predictions.pdf"),width=28,height=9)
+p.c
+dev.off()
+
+png(paste0(output_dir,"compare_dev_full_predictions.png"),width=pngwidth,height=1000,res=pngres,restoreConsole=TRUE)
+p.c
+dev.off()
+```
+
+## Slimmed down model for sharing
+```{r}
+#| label: Slimmed down model for sharing
+
+
+#M1.5.slim
+  m1.5.final <- m1.5
+  m1.5.final$residuals <- NULL
+  m1.5.final$linear.predictors <- NULL
+  m1.5.final$y <- NULL
+  m1.5.final$x <- NULL
+   
+#Predict hba1c outcome on treatment actually received m1.5
+  md.train.cc <- md.train.cc %>% mutate(predm1.5=predict(m1.5,md.train.cc))
+  head(md.train.cc$predm1.5)
+
+#Predict hba1c outcome on treatment actually received m1.5.final
+  md.train.cc <- md.train.cc %>% mutate(predm1.5.final=predict(m1.5.final,md.train.cc))
+  head(md.train.cc$predm1.5.final)
+  
+  summary(lm(predm1.5~predm1.5.final,data=md.train.cc))
+
+  md.train.cc <- model.predict(md.train.cc,m1.5.final)
+
+  save(m1.5.final,file=paste0(output_dir,"fivedrugmodel_5knot_share_20230823.Rdata"))
+  Function(m1.5.final)
+  
+  describe(md.all.cc$t2dmduration)
+
+  md.dummy <- sample_n(md.train.cc, 10) %>% 
+    dplyr::select(drugline, ncurrtx, ethnicity, imd5, smoke, sex, agetx, t2dmduration, prehdl, prealt, preegfr, prebmi, pretotalcholesterol, prehba1c, hba1cmonth)
+  
+  model.predict2 <- function(data,model) {
+  data <- data %>% 
+    mutate(drugclass="DPP4")
+  data$DPP4test <- predict(model,data)
+  data <- data %>% 
+    mutate(drugclass="SGLT2")
+  data$SGLT2test <- predict(model,data)
+  data <- data %>% 
+    mutate(drugclass="SU")
+  data$SUtest <- predict(model,data)
+  data <- data %>% 
+    mutate(drugclass="TZD")
+  data$TZDtest <- predict(model,data)
+  data <- data %>% 
+    mutate(drugclass="GLP1")
+  data$GLP1test <- predict(model,data)
+  return(data)
+}
+
+  md.dummy <- model.predict2(md.dummy,m1.5.final)
+  head(md.dummy)
+
+  save(md.dummy,file=paste0(data_dir,"md.dummy.Rda"))
+  write_csv(md.dummy,file=paste0(data_dir,"md.dummy.csv"))
+  
+    
+```
+
+
+## Glycaemic failure
+```{r}
+#| label: Glycaemic failure
 ```
