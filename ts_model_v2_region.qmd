@@ -6117,6 +6117,7 @@ fail <- t2d_1stinstance %>%
   fail.data <- md.test.all.cc %>% dplyr::filter(prehba1c<76)
   fail.data <- disc.2004.cc
   fail.data <- disc.2004.cc %>% dplyr::filter(prehba1c<76)
+  fail.data <- disc.2004.cc %>% dplyr::filter(drugclass!="DPP4")
 
 fail.data <- merge(fail.data,fail,by=c("patid","drugclass")) 
 
@@ -6167,6 +6168,26 @@ summary(coxph(Surv(stime, fail) ~ drugclass, data = fail.data))
 summary(coxph(Surv(stime, fail) ~ drugclass + prehba1c, data = fail.data))
 summary(coxph(Surv(stime, fail) ~ drugclass + prehba1c + agetx + preegfr + prebmi + drugline + ncurrtx + t2dmduration + ethnicity + imd5, 
               data = fail.data))
+
+m.fail <- coxph(Surv(stime, fail) ~ 
+                drugclass +
+                drugline +
+                ncurrtx +
+                ethnicity +
+                imd5 +
+                smoke +
+                #rcs(hba1cmonth,5) +
+                rcs(agetx,5) +
+                sex +
+                rcs(t2dmduration,5) +
+                rcs(pretotalcholesterol,5) +
+                rcs(prehdl,5) +
+                rcs(prealt,5) +
+                rcs(preegfr,5) +
+                rcs(prebmi,5) +
+                rcs(prehba1c,5),
+              data = match.final,x=T,y=T)
+summary(m.fail)
 
 #Concordant matched comparison
 
