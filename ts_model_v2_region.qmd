@@ -5890,6 +5890,7 @@ m1 <- m1.5
 ```
 
 ## Whole population model
+
 ```{r}
 #| label: Whole population model
 nrow(md.all.cc)
@@ -6042,8 +6043,392 @@ dev.off()
     
 ```
 
-
 ## Glycaemic failure
 ```{r}
 #| label: Glycaemic failure
+load("C:/Users/jmd237/OneDrive - University of Exeter/John/CPRD/mastermind22/20230801_t2d_1stinstance.Rda")
+
+#Subset additional failure variables and merge
+fail <- t2d_1stinstance %>%
+  select(
+    patid,
+    drugclass,
+    hba1c_fail_7.5_date,
+    hba1c_fail_7.5_reason,
+    hba1c_fail_7.5_reached,
+    hba1c_fail_8.5_date,
+    hba1c_fail_8.5_reason,
+    hba1c_fail_8.5_reached,
+    hba1c_fail_baseline_date,
+    hba1c_fail_baseline_reason,
+    hba1c_fail_baseline_reached,
+    hba1c_fail_baseline_0.5_date,
+    hba1c_fail_baseline_0.5_reason,
+    hba1c_fail_baseline_0.5_reached)
+
+#Reload training data
+  md.train.cc <- md.train.cc.backup; cohort <- "dev"
+
+#Prepare combined test cohort
+  md.test.all <- rbind(md.test.2004.g,md.test.2004.yr)
+
+  md.test.all <- md.test.all %>% 
+    mutate(drugclass=factor(drugclass,
+                            levels=c("DPP4","GLP1","SGLT2","SU","TZD")))
+
+  #Define complete case set for variables with missing data
+  md.test.all.cc <- md.test.all %>% filter(complete.cases(pretotalcholesterol,
+                                                    prehdl,
+                                                    prealt,
+                                                    preegfr,
+                                                    prebmi))
+  
+  #Set data dist for rms package
+  md.test.all.cc <- md.test.all.cc %>% dplyr::select(-timeprevcombo_less61,-hb_extreme_53,-multi_drug_start,-INS.c)
+
+#Set fail dataset
+fail.data <- md.train.cc
+fail.data <- md.test.all.cc
+fail.data <- md.train.cc %>% dplyr::filter(prehba1c<76)
+fail.data <- md.test.all.cc %>% dplyr::filter(prehba1c<76)
+
+fail.data <- merge(fail.data,fail,by=c("patid","drugclass")) 
+
+#Define stime as earliest of: hba1c_fail_8.5_date, de-registration date, date of death, or 3 years 
+fail.data <- fail.data %>% 
+  mutate(
+    censdate = pmin(hba1c_fail_8.5_date,
+                    gp_record_end,
+                    death_date,
+                    dstartdate+(365.25*3),
+                    na.rm=TRUE),
+    stime = as.numeric(difftime(censdate, dstartdate, unit="days"))/365.25
+    )
+
+describe(fail.data$censdate)
+describe(fail.data$stime)
+
+#Define failure based on reason
+fail.data <- fail.data %>% 
+  mutate(
+    fail=if_else(hba1c_fail_8.5_date == censdate & 
+                   (hba1c_fail_8.5_reason == "Fail - 1 HbA1cs >threshold then add drug" | hba1c_fail_8.5_reason == "Fail - 2 HbA1cs >threshold"), 1, 0))
+table(fail.data$fail)
+
+#Overall K-M
+library(survival)
+library(ggsurvfit)
+s1 <- survfit(Surv(stime, fail) ~ 1, data = fail.data)
+s1
+
+survfit2(Surv(stime, fail) ~ 1, data = fail.data) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Years",
+    y = "Overall survival probability"
+  ) + 
+  add_confidence_interval()
+
+survfit2(Surv(stime, fail) ~ drugclass, data = fail.data, subset=hba1c_fail_8.5_reached==1) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Years",
+    y = "Overall survival probability"
+  ) + 
+  add_confidence_interval()
+
+summary(coxph(Surv(stime, fail) ~ drugclass, data = fail.data))
+summary(coxph(Surv(stime, fail) ~ drugclass + prehba1c, data = fail.data))
+summary(coxph(Surv(stime, fail) ~ drugclass + prehba1c + agetx + preegfr + prebmi + drugline + ncurrtx + t2dmduration + ethnicity + imd5, 
+              data = fail.data))
+
+#Concordant matched comparison
+
+fail.data <- model.predict(fail.data,m1.5)
+
+#Find best drug
+#https://stackoverflow.com/questions/37195322/create-a-new-variable-from-the-minimum-in-r
+setDT(fail.data)[, lowest.hba1c := apply(.SD, 1, min), .SDcols=c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+fail.data[, bestdrug := apply(.SD, 1, function(x) names(x)[which.min(x)]), .SDcols = c("DPP4", "SGLT2", "SU", "TZD", "GLP1")]
+
+#Define concordant and discordant
+fail.data <- data.frame(fail.data)
+fail.data <- fail.data %>% 
+  mutate(concordant = if_else(drugclass==bestdrug,1,0))
+
+table(fail.data$concordant)
+
+#Match concordant and discordant, with exact matching by baseline HbA1c ventile + all other predictors and covariates
+
+#Define baseline HbA1c ventile
+c1 <- fail.data %>% 
+  mutate(prehba1c.g=ntile(prehba1c, 20))
+
+c1 %>% 
+group_by(prehba1c.g) %>%
+dplyr::summarise(min=min(prehba1c),
+                 max=max(prehba1c))
+
+set.seed(19840503)  
+match <- matchit(concordant~
+                 drugline + 
+                 ncurrtx + 
+                 ethnicity +
+                 imd5 +
+                 smoke +
+                 agetx +
+                 t2dmduration +
+                 pretotalcholesterol +
+                 prehdl +
+                 prealt +
+                 preegfr +
+                 prebmi +
+                 prehba1c, 
+               data = c1,  
+               exact = ~ bestdrug + prehba1c.g + sex, #Exact match on bestdrug to prevent concordant-discordant pairs having same received best drugbestdrug + 
+               method = "nearest",distance="mahalanobis",ratio=1, replace=TRUE) #, caliper=0.01
+
+matched <- match.data(match)
+summary(match)
+plot(summary(match))
+table(matched$concordant)
+
+m.cd <- lm(posthba1cfinal ~ concordant,data=matched, weights=weights)
+summary(m.cd) 
+
+pred.overall <- m.cd$coefficients[2]
+pred.lci <- confint(m.cd)[2]
+pred.uci <- confint(m.cd)[2,2]
+
+### Prepare paired dataset
+match.t <- get_matches(match)
+table(match.t$concordant)
+
+#Get concordant subset and predicted values for each drug
+match.c <- get_matches(match) %>%
+filter(concordant==1) %>%
+dplyr::select(subclass, concordant,posthba1cfinal, drugclass, DPP4, SGLT2, SU, TZD, GLP1, weights, prehba1c, patid.c=patid) %>%
+mutate(subclass=as.numeric(subclass))
+
+#Get discordant subset
+match.d <- get_matches(match) %>%
+filter(concordant==0) %>%
+#filter(drugclass!="DPP4") %>%
+dplyr::select(subclass, disc.posthba1cfinal=posthba1cfinal, disc.drugclass=drugclass, disc.weights=weights, disc.prehba1c=prehba1c, patid.d=patid) %>%
+mutate(subclass=as.numeric(subclass))
+
+#Merge
+match.indv <- merge(match.c,match.d,by="subclass")
+
+#Check for duplicate patids (in theory a patient could match to themselves)
+match.indv <- match.indv %>% mutate(dup=identical(match.indv[['patid.c']],match.indv[['patid.d']]))
+table(match.indv$dup)
+
+#Drop if discordant patient receives same drug as concordant patient
+match.indv <- match.indv %>% 
+filter(drugclass!=disc.drugclass)
+#Cannot happen as match on bestdrug
+
+### Define predicted benefit for each pair
+
+#Define predicted outcome for concordant
+match.indv <- match.indv %>%
+mutate(pred.c=pmin(DPP4,SGLT2,SU,TZD,GLP1)) %>%
+#Define predicted outcome for discordant
+mutate(pred.d=ifelse(disc.drugclass=="DPP4",DPP4,
+                     ifelse(disc.drugclass=="SGLT2",SGLT2,
+                            ifelse(disc.drugclass=="SU",SU,
+                                   ifelse(disc.drugclass=="TZD",TZD,GLP1
+                                   ))))) %>%
+#Define predicted benefit
+mutate(pred.benefit=pred.c-pred.d,
+       pred.benefit.q=ntile(-pred.benefit, 10))
+describe(match.indv$pred.benefit)
+table(match.indv$pred.benefit.q)
+
+### Define observed benefit for each pair
+
+#Define observed benefit
+match.indv <- match.indv %>%
+mutate(obs.benefit=posthba1cfinal-disc.posthba1cfinal)
+
+#### Define combined matched dataset
+    match.indv.c <- match.indv %>% select(subclass,patid.c,pred.benefit.q, pred.benefit)
+    match.indv.d <- match.indv %>% select(subclass,patid.d,pred.benefit.q, pred.benefit)
+    
+    match.c <- get_matches(match) %>%
+    filter(concordant==1) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.c=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c,
+                  stime,fail)
+    match.c <- merge(match.c,match.indv.c,by=c("subclass","patid.c"))  %>% dplyr::select(-patid.c)            
+                  
+    match.d <- get_matches(match) %>%
+    filter(concordant==0) %>%
+    dplyr::select(subclass, concordant,posthba1cfinal, drugclass, patid.d=patid,
+                  hba1cmonth,drugline,ncurrtx,sex,ethnicity,imd5,smoke,agetx,t2dmduration,pretotalcholesterol,prehdl,prealt,preegfr,prebmi,prehba1c,
+                  stime,fail)
+    match.d <- merge(match.d,match.indv.d,by=c("subclass","patid.d")) %>% dplyr::select(-patid.d)               
+    
+    match.final <- rbind(match.c,match.d)
+    
+    
+#Model 
+ survfit2(Surv(stime, fail) ~ 1, data = match.final) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Years",
+    y = "Overall survival probability"
+  ) + 
+  add_confidence_interval()
+
+survfit2(Surv(stime, fail) ~ concordant, data = match.final) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Years",
+    y = "Overall survival probability"
+  ) + 
+  add_confidence_interval()
+
+summary(coxph(Surv(stime, fail) ~ concordant, data = match.final))
+summary(coxph(Surv(stime, fail) ~ concordant + prehba1c, data = match.final))
+summary(coxph(Surv(stime, fail) ~ concordant + prehba1c + agetx + preegfr + prebmi + drugline + ncurrtx + t2dmduration + ethnicity + imd5, 
+              data = match.final))
+   
+match.final$pred.benefit.q <- factor(match.final$pred.benefit.q)
+match.final$pred.benefit.abs <- -match.final$pred.benefit
+   
+ddist <- datadist(match.final); options(datadist='ddist')
+ 
+m.fail <- cph(Surv(stime, fail) ~ pred.benefit.q*concordant, 
+              data = match.final,x=T,y=T)
+    
+contrast.1 <- rms::contrast(m.fail,
+                                   list(concordant = 1, pred.benefit.q = levels(match.final$pred.benefit.q)),
+                                   list(concordant = 0, pred.benefit.q = levels(match.final$pred.benefit.q)))
+    
+    
+# save the contrast calculations in a dataframe
+contrast_df <- as.data.frame(contrast.1[c('pred.benefit.q','Contrast','Lower','Upper')])
+
+#plot and save
+contrast_plot_1 <- ggplot(data=contrast_df,aes(x=pred.benefit.q, y=exp(Contrast))) + 
+  geom_point(data=contrast_df,aes(x=pred.benefit.q, y=exp(Contrast)), size=1) + 
+  xlab(expression(paste("Predicted HbA1c benefit decile"))) + 
+  ylab("HR") +
+  #scale_x_continuous(breaks = seq(0,50,5)) +
+  #scale_y_continuous(breaks = seq(0.8,1.6,0.1), limits = c(0.8,1.6)) +
+  geom_errorbar(data=contrast_df,aes(x=pred.benefit.q,ymin=exp(Lower),ymax=exp(Upper)),alpha=0.5) +
+  geom_hline(yintercept = 1, linetype = "dashed")  +
+  theme(legend.position=c(0.8, 0.1)) +
+  theme(legend.title = element_blank()) +  
+  theme_bw() +
+  theme(text = element_text(size = 14),
+        axis.line = element_line(colour =  "grey50" ),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(), 
+        panel.background = element_blank()) +
+  theme(legend.text = element_text(colour="black", size=rel(1))) +
+  ggtitle("")
+contrast_plot_1
+    
+    
+m.fail <- cph(Surv(stime, fail) ~ rcs(pred.benefit.abs,5)*concordant, 
+              data = match.final,x=T,y=T)
+m.fail <- cph(Surv(stime, fail) ~ 
+                rcs(pred.benefit.abs,3)*concordant +
+                drugline +
+                ncurrtx +
+                ethnicity +
+                imd5 +
+                smoke +
+                rcs(hba1cmonth,5) +
+                rcs(agetx,5) +
+                sex +
+                rcs(t2dmduration,5) +
+                rcs(pretotalcholesterol,5) +
+                rcs(prehdl,5) +
+                rcs(prealt,5) +
+                rcs(preegfr,5) +
+                rcs(prebmi,5) +
+                rcs(prehba1c,5),
+              data = match.final,x=T,y=T)
+
+c1 <- quantile(match.final$pred.benefit.abs, .01, na.rm=TRUE)
+c99 <- quantile(match.final$pred.benefit.abs, .99, na.rm=TRUE)
+
+# run the contrast calculation
+contrast_spline.1 <- rms::contrast(m.fail,
+                                   list(concordant = 1, pred.benefit.abs = seq(c1,c99,by=0.05)),
+                                   list(concordant = 0, pred.benefit.abs = seq(c1,c99,by=0.05)))
+
+# save the contrast calculations in a dataframe
+contrast_spline_df <- as.data.frame(contrast_spline.1[c('pred.benefit.abs','Contrast','Lower','Upper')])
+
+#plot and save
+contrast_spline_plot_1 <- ggplot(data=contrast_spline_df,aes(x=pred.benefit.abs, y=exp(Contrast))) + 
+  geom_line(data=contrast_spline_df,aes(x=pred.benefit.abs, y=exp(Contrast)), size=1) + 
+  xlab(expression(paste("Predicted HbA1c benefit"))) + 
+  ylab("HR (matched-concordant versus matched-discordant)") +
+  #scale_x_continuous(breaks = seq(0,50,5)) +
+  #scale_y_continuous(breaks = seq(0.8,1.6,0.1), limits = c(0.8,1.6)) +
+  geom_ribbon(data=contrast_spline_df,aes(x=pred.benefit.abs,ymin=exp(Lower),ymax=exp(Upper)),alpha=0.5) +
+  geom_hline(yintercept = 1, linetype = "dashed")  +
+  theme(legend.position=c(0.8, 0.1)) +
+  theme(legend.title = element_blank()) +  
+  theme_bw() +
+  theme(text = element_text(size = 14),
+        axis.line = element_line(colour =  "grey50" ),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(), 
+        panel.background = element_blank()) +
+  theme(legend.text = element_text(colour="black", size=rel(1))) +
+  ggtitle("")
+contrast_spline_plot_1
+
+# define a marginal histogram
+marginal_distribution <- function(x,var) {
+  ggplot(x, aes_string(x = var)) +
+    geom_histogram(bins = 64, alpha = 0.4, position = "identity") +
+    guides(fill = FALSE) +
+    #theme_void() +
+    theme(legend.title = element_blank(), panel.background = element_rect( fill = "white",color = "grey50")) +  
+    #scale_x_continuous(breaks = seq(0,50,5)) +
+    xlab(expression(paste("Predicted HbA1c benefit (mmol/mol)"))) + 
+    #theme(plot.margin = margin()) +
+    theme(text = element_text(size = 14),
+          axis.ticks.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank()) + 
+    theme(axis.ticks.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(),
+          axis.line.x = element_line(color="grey50"))
+  
+}
+
+
+hist.dta <- match.final %>% filter(pred.benefit.abs>=c1 &  pred.benefit.abs <= c99)
+hist.dta$dummy <- 1
+x_hist <- marginal_distribution(hist.dta, "pred.benefit.abs")
+x_hist
+  
+library(cowplot)
+# Arranging the plot using cowplot
+plot_grid(contrast_spline_plot_1, x_hist, ncol = 1,align = 'hv',
+          rel_heights = c(1,0.4), rel_widths = c(1,1))
+
+
+p1 <- plot_grid(contrast_spline_plot_1, x_hist, ncol = 1,align = 'hv',
+                rel_heights = c(1,0.4), rel_widths = c(1,1))
+p1  
+    
+    
+
 ```
